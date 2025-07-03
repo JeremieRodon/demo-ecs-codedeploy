@@ -1,0 +1,140 @@
+version: 0.2
+
+env:
+  variables:
+    # Default values - can be overridden by CodeBuild project environment variables
+    IMAGE_TAG: "latest"
+    TRIGGER_DEPLOYMENT: "true"
+  parameter-store:
+    # Optional: pull configuration from Parameter Store
+    # IMAGE_TAG: /ecs-codedeploy-demo/build/image-tag
+    # TRIGGER_DEPLOYMENT: /ecs-codedeploy-demo/build/trigger-deployment
+
+phases:
+  pre_build:
+    commands:
+      - echo "Starting pre-build phase..."
+      - echo "Build started on `date`"
+      - echo "Logging in to Amazon ECR..."
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+      - echo "ECR login successful"
+      - echo "IMAGE_TAG = $IMAGE_TAG"
+      - echo "ECR_REPOSITORY_URI = $ECR_REPOSITORY_URI"
+      - echo "TRIGGER_DEPLOYMENT = $TRIGGER_DEPLOYMENT"
+
+  build:
+    commands:
+      - echo "Starting build phase..."
+      - echo "Build phase started on `date`"
+
+      # Determine which version to build based on IMAGE_TAG or use current directory
+      - |
+        if [ -d "$IMAGE_TAG" ]; then
+          echo "Building from version directory: $IMAGE_TAG"
+          BUILD_DIR="$IMAGE_TAG"
+        elif [ -f "Dockerfile" ]; then
+          echo "Building from current directory (Dockerfile found)"
+          BUILD_DIR="."
+        else
+          echo "No Dockerfile found. Checking for version directories..."
+          if [ -d "v1.0" ]; then
+            echo "Defaulting to v1.0"
+            BUILD_DIR="v1.0"
+          else
+            echo "ERROR: No valid build directory found"
+            exit 1
+          fi
+        fi
+
+      - echo "Building Docker image from directory: $BUILD_DIR"
+      - echo "Image will be tagged as: $ECR_REPOSITORY_URI:$IMAGE_TAG"
+
+      # Build the Docker image
+      - cd $BUILD_DIR
+      - docker build -t $ECR_REPOSITORY_NAME:$IMAGE_TAG .
+      - docker tag $ECR_REPOSITORY_NAME:$IMAGE_TAG $ECR_REPOSITORY_URI:$IMAGE_TAG
+      - docker tag $ECR_REPOSITORY_NAME:$IMAGE_TAG $ECR_REPOSITORY_URI:latest
+
+      # Verify the image was built successfully
+      - docker images | grep $ECR_REPOSITORY_NAME
+
+  post_build:
+    commands:
+      - echo "Starting post-build phase..."
+      - echo "Build completed on `date`"
+      - echo "Pushing Docker images to ECR..."
+
+      # Push the images to ECR
+      - docker push $ECR_REPOSITORY_URI:$IMAGE_TAG
+      - docker push $ECR_REPOSITORY_URI:latest
+      - echo "Images pushed successfully"
+
+      # Get the image digest for the pushed image
+      - IMAGE_DIGEST=$(aws ecr describe-images --repository-name $ECR_REPOSITORY_NAME --image-ids imageTag=$IMAGE_TAG --query 'imageDetails[0].imageDigest' --output text)
+      - echo "Image digest: $IMAGE_DIGEST"
+
+      # Create new task definition with updated image
+      - echo "Creating new task definition..."
+      - cd $CODEBUILD_SRC_DIR
+      - |
+        echo "Fetching current task definition..."
+        aws ecs describe-task-definition --task-definition $TASK_DEFINITION_FAMILY --query taskDefinition > task-definition.json
+
+        echo "Updating task definition with new image..."
+        jq --arg IMAGE_URI "$ECR_REPOSITORY_URI:$IMAGE_TAG" '.containerDefinitions[0].image = $IMAGE_URI' task-definition.json > updated-task-definition.json
+
+        # Remove unwanted fields for registration
+        jq 'del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .placementConstraints, .compatibilities, .registeredAt, .registeredBy)' updated-task-definition.json > new-task-definition.json
+
+        echo "Registering new task definition..."
+        NEW_TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json file://new-task-definition.json --query 'taskDefinition.taskDefinitionArn' --output text)
+        echo "New task definition registered: $NEW_TASK_DEF_ARN"
+
+      # Create appspec.yml for CodeDeploy (if deployment is enabled)
+      - |
+        if [ "$TRIGGER_DEPLOYMENT" = "true" ]; then
+          echo "Creating appspec.yml for CodeDeploy..."
+          cat > appspec.yml << EOF
+        version: 1
+        Resources:
+          - TargetService:
+              Type: AWS::ECS::Service
+              Properties:
+                TaskDefinition: "$NEW_TASK_DEF_ARN"
+                LoadBalancerInfo:
+                  ContainerName: "$CONTAINER_NAME"
+                  ContainerPort: $CONTAINER_PORT
+                PlatformVersion: "LATEST"
+        EOF
+          echo "appspec.yml created successfully"
+          cat appspec.yml
+        else
+          echo "Deployment trigger disabled, skipping appspec.yml creation"
+        fi
+
+      # Output build information
+      - echo "=== BUILD SUMMARY ==="
+      - echo "Image Tag: $IMAGE_TAG"
+      - echo "ECR Repository: $ECR_REPOSITORY_URI"
+      - echo "Task Definition: $NEW_TASK_DEF_ARN"
+      - echo "Trigger Deployment: $TRIGGER_DEPLOYMENT"
+      - echo "Build Complete: $(date)"
+
+artifacts:
+  files:
+    - "**/*"
+  name: ecs-codedeploy-demo-build-$(date +%Y-%m-%d-%H-%M-%S)
+
+cache:
+  paths:
+    - "/root/.docker/**/*"
+
+reports:
+  build-reports:
+    files:
+      - "**/*"
+    name: build-report
+    file-format: "JunitXml"
+
+batch:
+  fast-fail: true

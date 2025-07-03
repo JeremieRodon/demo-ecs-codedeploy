@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>ECS CodeDeploy Demo - v1.0</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                margin: 0;
+                padding: 0;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                min-height: 100vh;
+                color: white;
+            }
+            .container {
+                text-align: center;
+                background: rgba(255, 255, 255, 0.1);
+                backdrop-filter: blur(10px);
+                border-radius: 20px;
+                padding: 40px;
+                box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+                border: 1px solid rgba(255, 255, 255, 0.18);
+            }
+            .version {
+                font-size: 4rem;
+                font-weight: bold;
+                margin-bottom: 20px;
+                text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+            }
+            .title {
+                font-size: 2rem;
+                margin-bottom: 20px;
+                opacity: 0.9;
+            }
+            .description {
+                font-size: 1.2rem;
+                opacity: 0.8;
+                max-width: 600px;
+                line-height: 1.6;
+            }
+            .status {
+                margin-top: 30px;
+                padding: 15px;
+                background: rgba(255, 255, 255, 0.2);
+                border-radius: 10px;
+                font-size: 1.1rem;
+            }
+            .metadata {
+                margin-top: 20px;
+                font-size: 0.9rem;
+                opacity: 0.7;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="version">v1.0</div>
+            <div class="title">ECS CodeDeploy Demo</div>
+            <div class="description">
+                Welcome to the ECS CodeDeploy demonstration! This is the initial
+                version of our application running on Amazon ECS with Fargate.
+                This version showcases the basic setup with a simple Apache web
+                server serving static content.
+            </div>
+            <div class="status">🚀 Status: Initial Deployment</div>
+            <div class="metadata">
+                <div>Build: Initial Release</div>
+                <div>Environment: Production</div>
+                <div>Deployment Strategy: Blue/Green with CodeDeploy</div>
+                <div id="timestamp"></div>
+            </div>
+        </div>
+
+        <script>
+            // Display current timestamp
+            document.getElementById("timestamp").textContent =
+                "Loaded: " + new Date().toLocaleString();
+        </script>
+    </body>
+</html>

@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>ECS CodeDeploy Demo - v4.0 (Test Failure)</title>
+        <style>
+            body {
+                font-family: "Courier New", monospace;
+                background: linear-gradient(
+                    135deg,
+                    #8b0000 0%,
+                    #ff0000 50%,
+                    #ff4500 100%
+                );
+                margin: 0;
+                padding: 0;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                min-height: 100vh;
+                color: #ffffff;
+                overflow: hidden;
+                animation: errorFlash 2s infinite;
+            }
+            @keyframes errorFlash {
+                0% {
+                    filter: brightness(1);
+                }
+                50% {
+                    filter: brightness(1.2);
+                }
+                100% {
+                    filter: brightness(1);
+                }
+            }
+            .container {
+                text-align: center;
+                background: rgba(0, 0, 0, 0.8);
+                backdrop-filter: blur(15px);
+                border-radius: 20px;
+                padding: 40px;
+                box-shadow:
+                    0 0 50px rgba(255, 0, 0, 0.5),
+                    inset 0 0 50px rgba(255, 0, 0, 0.2);
+                border: 2px solid rgba(255, 0, 0, 0.7);
+                position: relative;
+                max-width: 800px;
+                animation: shake 1s infinite;
+            }
+            @keyframes shake {
+                0% {
+                    transform: translateX(0);
+                }
+                25% {
+                    transform: translateX(-2px);
+                }
+                50% {
+                    transform: translateX(2px);
+                }
+                75% {
+                    transform: translateX(-2px);
+                }
+                100% {
+                    transform: translateX(0);
+                }
+            }
+            .version {
+                font-size: 5rem;
+                font-weight: bold;
+                margin-bottom: 20px;
+                text-shadow: 0 0 30px #ff0000;
+                color: #ff0000;
+                animation: blink 1.5s infinite;
+            }
+            @keyframes blink {
+                0% {
+                    opacity: 1;
+                }
+                50% {
+                    opacity: 0.3;
+                }
+                100% {
+                    opacity: 1;
+                }
+            }
+            .title {
+                font-size: 2rem;
+                margin-bottom: 25px;
+                color: #ffff00;
+                text-shadow: 0 0 15px #ffff00;
+            }
+            .error-banner {
+                background: rgba(255, 0, 0, 0.9);
+                border: 2px solid #ffffff;
+                border-radius: 10px;
+                padding: 20px;
+                margin: 20px 0;
+                font-size: 1.5rem;
+                font-weight: bold;
+                animation: pulse 1s infinite;
+            }
+            @keyframes pulse {
+                0% {
+                    transform: scale(1);
+                }
+                50% {
+                    transform: scale(1.05);
+                }
+                100% {
+                    transform: scale(1);
+                }
+            }
+            .description {
+                font-size: 1.2rem;
+                color: #f8f8f2;
+                max-width: 700px;
+                line-height: 1.8;
+                margin-bottom: 30px;
+                text-align: left;
+            }
+            .failure-details {
+                background: rgba(255, 255, 0, 0.1);
+                border: 2px solid #ffff00;
+                border-radius: 8px;
+                padding: 20px;
+                margin: 20px 0;
+                text-align: left;
+                font-family: "Courier New", monospace;
+            }
+            .failure-details h3 {
+                color: #ffff00;
+                margin: 0 0 15px 0;
+            }
+            .failure-details ul {
+                color: #ffffff;
+                margin: 0;
+                padding-left: 20px;
+            }
+            .status {
+                margin-top: 30px;
+                padding: 20px;
+                background: rgba(255, 0, 0, 0.3);
+                border-radius: 10px;
+                font-size: 1.3rem;
+                border: 2px solid rgba(255, 0, 0, 0.7);
+                color: #ffffff;
+            }
+            .metadata {
+                margin-top: 25px;
+                font-size: 1rem;
+                color: #ff6666;
+                background: rgba(255, 102, 102, 0.1);
+                padding: 15px;
+                border-radius: 8px;
+                border-left: 4px solid #ff6666;
+            }
+            .hidden-trigger {
+                display: none;
+                /* This is the trigger that the integration test will detect */
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="version">v4.0</div>
+            <div class="title">⚠️ ECS CodeDeploy Demo - FAILURE TEST ⚠️</div>
+
+            <div class="error-banner">
+                🚨 INTEGRATION TEST FAILURE DEMONSTRATION 🚨
+            </div>
+
+            <div class="description">
+                <strong
+                    >⛔ WARNING: This is v4.0 - The Failure Test Version
+                    ⛔</strong
+                ><br /><br />
+                This version is intentionally designed to fail integration tests
+                to demonstrate CodeDeploy's automatic rollback capabilities. The
+                deployment should be automatically rolled back when the
+                integration test Lambda function detects the failure trigger.
+            </div>
+
+            <div class="failure-details">
+                <h3>🔍 What This Version Tests:</h3>
+                <ul>
+                    <li>Integration test failure detection</li>
+                    <li>Automatic deployment rollback</li>
+                    <li>Blue/Green deployment safety mechanisms</li>
+                    <li>Lambda-based quality gates</li>
+                    <li>CodeDeploy lifecycle hook integration</li>
+                </ul>
+            </div>
+
+            <div class="status">
+                🛑 STATUS: DEPLOYMENT SHOULD FAIL AND ROLLBACK
+            </div>
+
+            <div class="metadata">
+                <div><strong>Build:</strong> Failure Test Release v4.0.0</div>
+                <div>
+                    <strong>Environment:</strong> Production Cluster (Test)
+                </div>
+                <div>
+                    <strong>Strategy:</strong> Blue/Green with Integration Test
+                </div>
+                <div><strong>Expected Result:</strong> Automatic Rollback</div>
+                <div>
+                    <strong>Test Status:</strong> Will trigger integration test
+                    failure
+                </div>
+                <div id="timestamp"></div>
+            </div>
+
+            <!-- Hidden trigger that integration test will detect -->
+            <div class="hidden-trigger">TEST_FAILURE_TRIGGER</div>
+        </div>
+
+        <script>
+            // Enhanced timestamp with failure indication
+            const now = new Date();
+            const options = {
+                year: "numeric",
+                month: "2-digit",
+                day: "2-digit",
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+                timeZone: "UTC",
+            };
+            document.getElementById("timestamp").innerHTML =
+                `<strong>Deployed:</strong> ${now.toLocaleDateString("en-US", options)} UTC (SHOULD ROLLBACK)`;
+
+            // Add console warnings for debugging
+            console.warn("🚨 V4.0 FAILURE TEST VERSION LOADED 🚨");
+            console.warn(
+                "This version contains TEST_FAILURE_TRIGGER and should cause deployment rollback",
+            );
+            console.warn(
+                "Integration test should detect the failure trigger and fail the deployment",
+            );
+
+            // Simulate some error behavior for demonstration
+            setTimeout(() => {
+                console.error(
+                    "Simulated error condition in v4.0 for demonstration purposes",
+                );
+            }, 5000);
+        </script>
+    </body>
+</html>

@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>ECS CodeDeploy Demo - v2.0</title>
+        <style>
+            body {
+                font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+                background: linear-gradient(135deg, #ff9a56 0%, #ff6b35 100%);
+                margin: 0;
+                padding: 0;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                min-height: 100vh;
+                color: white;
+            }
+            .container {
+                text-align: center;
+                background: rgba(255, 255, 255, 0.15);
+                backdrop-filter: blur(15px);
+                border-radius: 25px;
+                padding: 50px;
+                box-shadow: 0 15px 35px 0 rgba(255, 107, 53, 0.3);
+                border: 2px solid rgba(255, 255, 255, 0.25);
+                animation: pulse 2s infinite;
+            }
+            @keyframes pulse {
+                0% {
+                    transform: scale(1);
+                }
+                50% {
+                    transform: scale(1.02);
+                }
+                100% {
+                    transform: scale(1);
+                }
+            }
+            .version {
+                font-size: 5rem;
+                font-weight: bold;
+                margin-bottom: 20px;
+                text-shadow: 3px 3px 6px rgba(0, 0, 0, 0.4);
+                color: #fff200;
+            }
+            .title {
+                font-size: 2.5rem;
+                margin-bottom: 25px;
+                opacity: 0.95;
+                text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.3);
+            }
+            .description {
+                font-size: 1.3rem;
+                opacity: 0.9;
+                max-width: 700px;
+                line-height: 1.7;
+                margin-bottom: 20px;
+            }
+            .features {
+                margin-top: 20px;
+                text-align: left;
+                display: inline-block;
+            }
+            .features ul {
+                list-style: none;
+                padding: 0;
+            }
+            .features li {
+                padding: 5px 0;
+                font-size: 1.1rem;
+            }
+            .features li:before {
+                content: "✨ ";
+                margin-right: 10px;
+            }
+            .status {
+                margin-top: 30px;
+                padding: 20px;
+                background: rgba(255, 255, 255, 0.25);
+                border-radius: 15px;
+                font-size: 1.2rem;
+                border: 1px solid rgba(255, 255, 255, 0.3);
+            }
+            .metadata {
+                margin-top: 25px;
+                font-size: 1rem;
+                opacity: 0.8;
+            }
+            .deployment-info {
+                background: rgba(0, 0, 0, 0.2);
+                padding: 15px;
+                border-radius: 10px;
+                margin-top: 20px;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="version">v2.0</div>
+            <div class="title">ECS CodeDeploy Demo</div>
+            <div class="description">
+                🎉 Welcome to version 2.0! This updated version demonstrates the
+                power of Blue/Green deployments with AWS CodeDeploy. Notice the
+                new styling, enhanced features, and zero-downtime deployment
+                capability.
+            </div>
+
+            <div class="features">
+                <h3>New in v2.0:</h3>
+                <ul>
+                    <li>Enhanced UI with new orange gradient theme</li>
+                    <li>Animated container with pulse effect</li>
+                    <li>Improved typography and spacing</li>
+                    <li>Better mobile responsiveness</li>
+                    <li>Enhanced health check endpoints</li>
+                </ul>
+            </div>
+
+            <div class="status">
+                🔄 Status: Successfully Updated via Blue/Green Deployment
+            </div>
+
+            <div class="deployment-info">
+                <div class="metadata">
+                    <div>Build: Feature Enhancement Release</div>
+                    <div>Environment: Production</div>
+                    <div>Deployment Strategy: Blue/Green with CodeDeploy</div>
+                    <div>Update Method: Zero-Downtime Canary</div>
+                    <div id="timestamp"></div>
+                </div>
+            </div>
+        </div>
+
+        <script>
+            // Display current timestamp with enhanced formatting
+            const now = new Date();
+            const options = {
+                year: "numeric",
+                month: "long",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+                timeZoneName: "short",
+            };
+            document.getElementById("timestamp").textContent =
+                "Deployed: " + now.toLocaleDateString("en-US", options);
+
+            // Add some interactivity
+            document
+                .querySelector(".container")
+                .addEventListener("click", function () {
+                    this.style.transform = "scale(0.98)";
+                    setTimeout(() => {
+                        this.style.transform = "scale(1)";
+                    }, 100);
+                });
+        </script>
+    </body>
+</html>

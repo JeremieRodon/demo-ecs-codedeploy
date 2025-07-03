@@ -1,0 +1,54 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "ECR Repository for ECS CodeDeploy Demo"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: "ecs-codedeploy-demo"
+    Description: "Name of the project"
+
+Resources:
+  # ECR Repository
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Ref ProjectName
+      ImageScanningConfiguration:
+        ScanOnPush: false
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep only 5 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 5
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+
+Outputs:
+  ECRRepositoryURI:
+    Description: "ECR Repository URI"
+    Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepository}"
+    Export:
+      Name: !Sub "${ProjectName}-ECRRepositoryURI"
+
+  ECRRepositoryName:
+    Description: "ECR Repository Name"
+    Value: !Ref ECRRepository
+    Export:
+      Name: !Sub "${ProjectName}-ECRRepositoryName"
+
+  ECRRepositoryArn:
+    Description: "ECR Repository ARN"
+    Value: !GetAtt ECRRepository.Arn
+    Export:
+      Name: !Sub "${ProjectName}-ECRRepositoryArn"

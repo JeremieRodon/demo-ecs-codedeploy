@@ -1,0 +1,834 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Simplified ECS CodeDeploy Demo - ECR push triggers CodeDeploy via EventBridge"
+
+# This CloudFormation template creates a complete Blue/Green deployment pipeline for ECS containers.
+# When you push a new image to ECR, it automatically triggers a Blue/Green deployment via CodeDeploy.
+# The deployment includes integration testing to ensure the new version works before switching traffic.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: "ecs-codedeploy-demo"
+    Description: "Name of the project - used to name all resources consistently"
+
+Resources:
+  # =============================================================================
+  # NETWORKING INFRASTRUCTURE
+  # =============================================================================
+  # This section creates the basic networking foundation:
+  # - VPC (Virtual Private Cloud) - your own isolated network in AWS
+  # - Public subnets in 2 availability zones - for high availability
+  # - Internet Gateway - allows internet access
+  # - Route table - defines how traffic flows
+  # VPC - Your own private network in AWS (like your office network)
+  # CIDR 10.0.0.0/16 gives us 65,536 IP addresses to work with
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: "10.0.0.0/16" # Network range: 10.0.0.0 to 10.0.255.255
+      EnableDnsHostnames: true # Allow resources to have DNS names
+      EnableDnsSupport: true # Enable DNS resolution
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-vpc"
+
+  # Internet Gateway - The "front door" that allows internet access to/from our VPC
+  # Think of it as the router that connects your office network to the internet
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-igw"
+
+  # Attach the Internet Gateway to our VPC
+  # This is like plugging the router into your office network
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  # Public Subnet 1 - First subnet in Availability Zone 1
+  # "Public" means resources here can reach the internet and be reached from internet
+  # We use multiple AZs for high availability (if one datacenter fails, the other keeps running)
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs ""] # First available AZ in this region
+      CidrBlock: "10.0.1.0/24" # 256 IP addresses (10.0.1.0 to 10.0.1.255)
+      MapPublicIpOnLaunch: true # Auto-assign public IPs to resources
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-public-subnet-1"
+
+  # Public Subnet 2 - Second subnet in Availability Zone 2
+  # Having resources in multiple AZs provides redundancy and higher availability
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs ""] # Second available AZ in this region
+      CidrBlock: "10.0.2.0/24" # 256 IP addresses (10.0.2.0 to 10.0.2.255)
+      MapPublicIpOnLaunch: true # Auto-assign public IPs to resources
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-public-subnet-2"
+
+  # Route Table - Defines how network traffic is routed
+  # Think of it as a GPS for network packets - tells them where to go
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-public-rt"
+
+  # Default Route - Sends all internet traffic (0.0.0.0/0) to the Internet Gateway
+  # This is like setting your default gateway in network settings
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment # Must wait for gateway to be attached first
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: "0.0.0.0/0" # All internet traffic (anywhere)
+      GatewayId: !Ref InternetGateway # Send it to the Internet Gateway
+
+  # Associate the route table with subnet 1
+  # This tells subnet 1 to use our routing rules
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+
+  # Associate the route table with subnet 2
+  # This tells subnet 2 to use our routing rules
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
+
+  # =============================================================================
+  # SECURITY GROUPS
+  # =============================================================================
+  # Security Groups are like firewalls - they control what traffic is allowed in/out
+  # Think of them as bouncer rules: "Allow HTTP from anywhere, but block everything else"
+
+  # Security Group for the Application Load Balancer (ALB)
+  # This controls what traffic can reach our load balancer from the internet
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security group for ALB - allows HTTP traffic from internet"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80 # Production HTTP traffic
+          ToPort: 80
+          CidrIp: "0.0.0.0/0" # Allow from anywhere on the internet
+        - IpProtocol: tcp
+          FromPort: 8080 # Test HTTP traffic (for Blue/Green testing)
+          ToPort: 8080
+          CidrIp: "0.0.0.0/0" # Allow from anywhere on the internet
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-alb-sg"
+
+  # Security Group for ECS Tasks (our containers)
+  # This only allows traffic from the ALB - containers can't be reached directly from internet
+  # This is a security best practice: only the load balancer can talk to the containers
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security group for ECS tasks - only allows traffic from ALB"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80 # HTTP port on containers
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ALBSecurityGroup # Only allow traffic from ALB
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-ecs-sg"
+
+  # =============================================================================
+  # ECS (CONTAINER ORCHESTRATION) INFRASTRUCTURE
+  # =============================================================================
+  # ECS = Elastic Container Service - AWS's container orchestration service
+  # Think of it as a smart system that runs and manages your Docker containers
+  # It's like Kubernetes but AWS-managed
+
+  # ECS Cluster - A logical grouping of compute resources
+  # This is where our containers will run
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref ProjectName
+      CapacityProviders:
+        - FARGATE # Use Fargate (serverless containers, no EC2 to manage)
+
+  # ECS Task Execution Role - Permissions for ECS to run our containers
+  # This role allows ECS to pull images from ECR, write logs to CloudWatch, etc.
+  # Think of it as giving ECS permission to do its job of running containers
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com # Only ECS can use this role
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy # Standard ECS permissions
+
+  # ECS Task Definition - The blueprint for how to run our container
+  # This is like a recipe that tells ECS: what image to use, how much CPU/memory, what ports, etc.
+  # This is the initial task definition; Lambda will create new ones when deploying new versions
+  ECSTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Ref ProjectName # Family name groups related task definitions
+      NetworkMode: awsvpc # Each container gets its own network interface
+      RequiresCompatibilities:
+        - FARGATE # Must run on Fargate (serverless)
+      Cpu: 256 # 0.25 vCPU (256 CPU units)
+      Memory: 512 # 512 MB RAM
+      ExecutionRoleArn: !Ref ECSTaskExecutionRole
+      ContainerDefinitions:
+        - Name: web # Container name
+          Image: !Sub
+            - "${ECRRepositoryURI}:latest" # Docker image to run (imported from ECR stack)
+            - ECRRepositoryURI:
+                Fn::ImportValue: !Sub "${ProjectName}-ECRRepositoryURI"
+          Essential: true # If this container stops, the task stops
+          PortMappings:
+            - ContainerPort: 80 # Container listens on port 80
+              Protocol: tcp
+
+  # =============================================================================
+  # APPLICATION LOAD BALANCER (ALB)
+  # =============================================================================
+  # The ALB distributes incoming traffic across multiple containers
+  # It's also key to Blue/Green deployments - it can switch traffic between versions
+
+  # Application Load Balancer - The entry point for all web traffic
+  # This is what users connect to; it forwards requests to healthy containers
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${ProjectName}-alb"
+      Scheme: internet-facing # Can be reached from the internet
+      Type: application # Layer 7 load balancer (HTTP/HTTPS)
+      SecurityGroups:
+        - !Ref ALBSecurityGroup # Use our ALB security group
+      Subnets:
+        - !Ref PublicSubnet1 # Deploy across both subnets for high availability
+        - !Ref PublicSubnet2
+
+  # Target Groups for Blue/Green Deployments
+  # Target Groups are like "buckets" that hold containers
+  # CodeDeploy alternates between Blue and Green with each deployment
+  # Initially: Blue = production, Green = new. Next deployment: Green = production, Blue = new
+
+  # Blue Target Group - One of two target groups for Blue/Green deployments
+  # Will alternate between holding current production and new version
+  BlueTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${ProjectName}-blue"
+      Port: 80 # Port that containers listen on
+      Protocol: HTTP
+      TargetType: ip # Targets are IP addresses (for Fargate)
+      VpcId: !Ref VPC
+      HealthCheckPath: / # URL path to check if container is healthy
+      HealthCheckIntervalSeconds: 30 # How often to check health
+      HealthyThresholdCount: 2 # Healthy after 2 successful checks
+      UnhealthyThresholdCount: 3 # Unhealthy after 3 failed checks
+
+  # Green Target Group - One of two target groups for Blue/Green deployments
+  # Will alternate between holding current production and new version
+  GreenTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${ProjectName}-green"
+      Port: 80 # Port that containers listen on
+      Protocol: HTTP
+      TargetType: ip # Targets are IP addresses (for Fargate)
+      VpcId: !Ref VPC
+      HealthCheckPath: / # URL path to check if container is healthy
+      HealthCheckIntervalSeconds: 30 # How often to check health
+      HealthyThresholdCount: 2 # Healthy after 2 successful checks
+      UnhealthyThresholdCount: 3 # Unhealthy after 3 failed checks
+
+  # ALB Production Listener - Handles real user traffic on port 80
+  # Initially routes to Blue target group, but CodeDeploy will alternate between
+  # Blue and Green target groups with each deployment
+  # DependsOn both target groups to prevent deletion issues when CodeDeploy has inverted target group assignments
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    DependsOn:
+      - BlueTargetGroup
+      - GreenTargetGroup
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref BlueTargetGroup # Start with Blue (current production)
+      LoadBalancerArn: !Ref ALB
+      Port: 80 # Production traffic (what users see)
+      Protocol: HTTP
+
+  # ALB Test Listener - Handles test traffic on port 8080
+  # This always routes to whichever target group contains the NEW version during deployment
+  # Integration tests will connect to this port to validate the new deployment
+  # DependsOn both target groups to prevent deletion issues when CodeDeploy has inverted target group assignments
+  ALBTestListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    DependsOn:
+      - BlueTargetGroup
+      - GreenTargetGroup
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref GreenTargetGroup # Routes to Green (new version under test)
+      LoadBalancerArn: !Ref ALB
+      Port: 8080 # Test traffic (for integration tests)
+      Protocol: HTTP
+
+  # ECS Service - Manages our containers and keeps them running
+  # This is like a supervisor that ensures we always have the right number of healthy containers
+  # With CODE_DEPLOY controller, deployments are handled by CodeDeploy (Blue/Green)
+  ECSService:
+    Type: AWS::ECS::Service
+    DependsOn: ALBListener # Must wait for ALB listener to be ready
+    Properties:
+      ServiceName: !Ref ProjectName
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref ECSTaskDefinition
+      LaunchType: FARGATE # Run on Fargate (serverless)
+      DesiredCount: 2 # Always run 2 containers for availability
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          SecurityGroups:
+            - !Ref ECSSecurityGroup # Use our ECS security group
+          Subnets:
+            - !Ref PublicSubnet1 # Deploy containers across both subnets
+            - !Ref PublicSubnet2
+          AssignPublicIp: ENABLED # Containers need public IPs to pull images
+      LoadBalancers:
+        - ContainerName: web # Connect to our web container
+          ContainerPort: 80 # Container port
+          TargetGroupArn: !Ref BlueTargetGroup # Start with Blue (CodeDeploy will alternate later)
+      DeploymentController:
+        Type: CODE_DEPLOY # Use CodeDeploy for Blue/Green deployments
+
+  # =============================================================================
+  # CODEDEPLOY (BLUE/GREEN DEPLOYMENT SERVICE)
+  # =============================================================================
+  # CodeDeploy manages Blue/Green deployments - it switches traffic safely between versions
+  # It can automatically rollback if health checks fail
+
+  # CodeDeploy Service Role - Permissions for CodeDeploy to manage deployments
+  # This role allows CodeDeploy to update load balancers, manage ECS services, etc.
+  CodeDeployServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codedeploy.amazonaws.com # Only CodeDeploy can use this role
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSCodeDeployRoleForECS # Standard CodeDeploy permissions
+      Policies:
+        - PolicyName: ELBPermissions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - elasticloadbalancing:DescribeTargetGroups # Read load balancer info
+                  - elasticloadbalancing:DescribeListeners
+                  - elasticloadbalancing:ModifyListener # Switch traffic between target groups
+                  - elasticloadbalancing:DescribeRules
+                  - elasticloadbalancing:ModifyRule
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - iam:PassRole # Pass ECS role to new tasks
+                Resource: !GetAtt ECSTaskExecutionRole.Arn
+
+  # =============================================================================
+  # INTEGRATION TEST LAMBDA FUNCTION
+  # =============================================================================
+  # This Lambda function runs integration tests on new deployments
+  # It validates the new version before traffic is switched to it
+  # If tests fail, CodeDeploy will automatically rollback
+
+  # CloudWatch Log Group for Integration Test Lambda
+  # Creating explicit log group ensures it's included in cleanup and has proper retention
+  # Using minimum retention (1 day) to minimize costs while keeping recent logs for debugging
+  IntegrationTestLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-integration-test"
+      RetentionInDays: 1 # Minimum retention - logs kept for 1 day only
+
+  # Integration Test Lambda Role - Permissions for the test function
+  IntegrationTestLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com # Only Lambda can use this role
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole # Basic Lambda permissions
+      Policies:
+        - PolicyName: IntegrationTestPermissions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - codedeploy:PutLifecycleEventHookExecutionStatus # Report test results back to CodeDeploy
+                Resource: "*"
+
+  # Integration Test Lambda Function - Validates deployments before traffic switch
+  # This function is called by CodeDeploy during the AfterAllowTestTraffic lifecycle event
+  # It performs 3 tests: connectivity, content validation, and performance
+  # If any test fails, the deployment is automatically rolled back
+  IntegrationTestFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: IntegrationTestLogGroup # Ensure log group exists before function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-integration-test"
+      Runtime: python3.13 # Python runtime for the Lambda function
+      Handler: index.lambda_handler # Entry point function
+      Role: !GetAtt IntegrationTestLambdaRole.Arn # IAM role for permissions
+      Timeout: 30 # Maximum execution time in seconds
+      Environment:
+        Variables:
+          ALB_DNS_NAME: !GetAtt ALB.DNSName # Load balancer DNS name for testing
+          TEST_PORT: "8080" # Test listener port (Green target group)
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import urllib3
+          import time
+          import os
+
+          codedeploy = boto3.client('codedeploy')
+          http = urllib3.PoolManager()
+
+          def lambda_handler(event, context):
+              print(f"Integration test started (AfterAllowTestTraffic): {json.dumps(event)}")
+
+              # Extract CodeDeploy event information
+              deployment_id = event.get('DeploymentId')
+              lifecycle_event_hook_execution_id = event.get('LifecycleEventHookExecutionId')
+
+              if not deployment_id or not lifecycle_event_hook_execution_id:
+                  print("ERROR: Missing required CodeDeploy event parameters")
+                  return {
+                      'statusCode': 400,
+                      'body': 'Missing required parameters'
+                  }
+
+              try:
+                  # Test configuration
+                  alb_dns = os.environ['ALB_DNS_NAME']
+                  test_port = os.environ['TEST_PORT']
+                  test_url = f"http://{alb_dns}:{test_port}"
+
+                  print(f"Testing URL (via test listener): {test_url}")
+
+                  print(f"[QUICK&DIRTY] Sleeping 20 secs to make sure the endpoint is actually on the test version...")
+                  time.sleep(20)
+
+                  # Perform integration tests after test traffic is routed
+                  test_results = []
+
+                  # Test 1: Basic connectivity
+                  print("Test 1: Basic connectivity check via test listener")
+                  response = http.request('GET', test_url, timeout=30.0)
+                  if response.status == 200:
+                      test_results.append({"test": "connectivity", "status": "PASS"})
+                      print("✓ Connectivity test passed")
+                  else:
+                      test_results.append({"test": "connectivity", "status": "FAIL", "details": f"HTTP {response.status}"})
+                      print(f"✗ Connectivity test failed: HTTP {response.status}")
+
+                  # Test 2: Content validation
+                  print("Test 2: Content validation")
+                  if response.status == 200:
+                      content = response.data.decode('utf-8')
+
+                      # Check for specific failure indicator (v4.0 will include this)
+                      if "TEST_FAILURE_TRIGGER" in content:
+                          test_results.append({"test": "content_validation", "status": "FAIL", "details": "Application contains failure trigger"})
+                          print("✗ Content validation failed: Application marked for failure")
+                      elif "ECS CodeDeploy Demo" in content:
+                          test_results.append({"test": "content_validation", "status": "PASS"})
+                          print("✓ Content validation passed")
+                      else:
+                          test_results.append({"test": "content_validation", "status": "FAIL", "details": "Expected content not found"})
+                          print("✗ Content validation failed: Expected content missing")
+                  else:
+                      test_results.append({"test": "content_validation", "status": "SKIP", "details": "Skipped due to connectivity failure"})
+
+                  # Test 3: Performance check (response time)
+                  print("Test 3: Performance check")
+                  if response.status == 200:
+                      start_time = time.time()
+                      perf_response = http.request('GET', test_url, timeout=30.0)
+                      response_time = time.time() - start_time
+
+                      if response_time < 5.0:  # 5 second threshold
+                          test_results.append({"test": "performance", "status": "PASS", "details": f"Response time: {response_time:.2f}s"})
+                          print(f"✓ Performance test passed: {response_time:.2f}s")
+                      else:
+                          test_results.append({"test": "performance", "status": "FAIL", "details": f"Response time too slow: {response_time:.2f}s"})
+                          print(f"✗ Performance test failed: {response_time:.2f}s")
+                  else:
+                      test_results.append({"test": "performance", "status": "SKIP", "details": "Skipped due to connectivity failure"})
+
+                  # Determine overall test result
+                  failed_tests = [t for t in test_results if t["status"] == "FAIL"]
+                  overall_status = "Failed" if failed_tests else "Succeeded"
+
+                  print(f"Integration test results: {json.dumps(test_results, indent=2)}")
+                  print(f"Overall status: {overall_status}")
+
+                  # Report results to CodeDeploy
+                  codedeploy.put_lifecycle_event_hook_execution_status(
+                      deploymentId=deployment_id,
+                      lifecycleEventHookExecutionId=lifecycle_event_hook_execution_id,
+                      status=overall_status
+                  )
+
+                  return {
+                      'statusCode': 200,
+                      'body': json.dumps({
+                          'overall_status': overall_status,
+                          'test_results': test_results,
+                          'deployment_id': deployment_id
+                      })
+                  }
+
+              except Exception as e:
+                  print(f"Integration test failed with exception: {str(e)}")
+
+                  # Report failure to CodeDeploy
+                  try:
+                      codedeploy.put_lifecycle_event_hook_execution_status(
+                          deploymentId=deployment_id,
+                          lifecycleEventHookExecutionId=lifecycle_event_hook_execution_id,
+                          status='Failed'
+                      )
+                  except Exception as cd_error:
+                      print(f"Failed to report to CodeDeploy: {str(cd_error)}")
+
+                  return {
+                      'statusCode': 500,
+                      'body': json.dumps({
+                          'error': str(e),
+                          'deployment_id': deployment_id
+                      })
+                  }
+
+  # Permission for CodeDeploy to invoke Integration Test Lambda
+  # This allows CodeDeploy to call our integration test function during deployments
+  IntegrationTestInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref IntegrationTestFunction
+      Action: lambda:InvokeFunction # Allow function invocation
+      Principal: codedeploy.amazonaws.com # CodeDeploy service principal
+
+  # =============================================================================
+  # CODEDEPLOY
+  # =============================================================================
+  # CodeDeploy Application - Top-level container for deployments
+  # This is the main application that CodeDeploy will manage deployments for
+  CodeDeployApplication:
+    Type: AWS::CodeDeploy::Application
+    Properties:
+      ApplicationName: !Ref ProjectName
+      ComputePlatform: ECS # We're deploying to ECS (not EC2 or Lambda)
+
+  # CodeDeploy Deployment Group - Defines how deployments are executed
+  # This is the configuration that tells CodeDeploy how to perform Blue/Green deployments
+  CodeDeployDeploymentGroup:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      ApplicationName: !Ref CodeDeployApplication
+      DeploymentGroupName: !Sub "${ProjectName}-dg"
+      ServiceRoleArn: !GetAtt CodeDeployServiceRole.Arn # Role for CodeDeploy permissions
+      DeploymentConfigName: CodeDeployDefault.ECSCanary10Percent5Minutes # Deployment strategy
+      DeploymentStyle:
+        DeploymentType: BLUE_GREEN # Use Blue/Green deployment (not rolling)
+        DeploymentOption: WITH_TRAFFIC_CONTROL # Use load balancer to control traffic
+      BlueGreenDeploymentConfiguration:
+        TerminateBlueInstancesOnDeploymentSuccess:
+          Action: TERMINATE # Shut down old containers after successful deployment
+          TerminationWaitTimeInMinutes: 1 # Wait 1 minute before terminating
+        DeploymentReadyOption:
+          ActionOnTimeout: CONTINUE_DEPLOYMENT # Continue if no manual intervention
+      ECSServices:
+        - ServiceName: !GetAtt ECSService.Name # ECS service to deploy to
+          ClusterName: !Ref ECSCluster # ECS cluster containing the service
+      LoadBalancerInfo:
+        TargetGroupPairInfoList:
+          - ProdTrafficRoute:
+              ListenerArns:
+                - !Ref ALBListener # Production traffic listener (port 80)
+            TestTrafficRoute:
+              ListenerArns:
+                - !Ref ALBTestListener # Test traffic listener (port 8080)
+            TargetGroups:
+              - Name: !GetAtt BlueTargetGroup.TargetGroupName # Blue target group
+              - Name: !GetAtt GreenTargetGroup.TargetGroupName # Green target group
+      AutoRollbackConfiguration:
+        Enabled: true # Enable automatic rollback on failure
+        Events:
+          - DEPLOYMENT_FAILURE # Rollback if deployment fails
+          - DEPLOYMENT_STOP_ON_REQUEST # Rollback if manually stopped
+
+  # =============================================================================
+  # DEPLOYMENT TRIGGER LAMBDA FUNCTION
+  # =============================================================================
+  # This Lambda function is triggered by EventBridge when new images are pushed to ECR
+  # It creates a new ECS task definition and starts a CodeDeploy deployment
+  # This is the "glue" that connects ECR image pushes to CodeDeploy deployments
+
+  # CloudWatch Log Group for Deployment Trigger Lambda
+  # Creating explicit log group ensures it's included in cleanup and has proper retention
+  # Using minimum retention (1 day) to minimize costs while keeping recent logs for debugging
+  TriggerDeploymentLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-trigger-deployment"
+      RetentionInDays: 1 # Minimum retention - logs kept for 1 day only
+
+  # Lambda Role for triggering CodeDeploy - Permissions for the deployment trigger function
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com # Only Lambda can use this role
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole # Basic Lambda permissions
+      Policies:
+        - PolicyName: CodeDeployTrigger
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - codedeploy:CreateDeployment # Start new deployments
+                  - codedeploy:GetDeploymentConfig # Read deployment configuration
+                  - codedeploy:RegisterApplicationRevision # Register new application versions
+                  - ecs:DescribeTaskDefinition # Read current task definition
+                  - ecs:RegisterTaskDefinition # Create new task definitions
+                  - iam:PassRole # Pass ECS execution role to new tasks
+                Resource: "*"
+
+  # Lambda Function to trigger CodeDeploy - The main deployment trigger function
+  # This function receives ECR push events and orchestrates the deployment process:
+  # 1. Extracts image information from the ECR event
+  # 2. Creates a new ECS task definition with the new image
+  # 3. Triggers a CodeDeploy Blue/Green deployment
+  # 4. Includes integration test hooks for validation
+  TriggerDeploymentFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: TriggerDeploymentLogGroup # Ensure log group exists before function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-trigger-deployment"
+      Runtime: python3.13 # Python runtime
+      Handler: index.lambda_handler # Entry point function
+      Role: !GetAtt LambdaExecutionRole.Arn # IAM role for permissions
+      Timeout: 30 # Maximum execution time in seconds
+      Environment:
+        Variables:
+          CODEDEPLOY_APPLICATION: !Ref CodeDeployApplication # CodeDeploy application name
+          CODEDEPLOY_DEPLOYMENT_GROUP: !Ref CodeDeployDeploymentGroup # Deployment group name
+          ECS_CLUSTER: !Ref ECSCluster # ECS cluster name
+          ECS_SERVICE: !Ref ECSService # ECS service name
+          TASK_DEFINITION_FAMILY: !Ref ProjectName # Task definition family name
+          CONTAINER_NAME: "web" # Container name to update
+          INTEGRATION_TEST_FUNCTION_NAME: !Ref IntegrationTestFunction # Integration test function
+
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import os
+
+          codedeploy = boto3.client('codedeploy')
+          ecs = boto3.client('ecs')
+
+          def lambda_handler(event, context):
+              print(f"Received event: {json.dumps(event)}")
+
+              # Extract image info from ECR event
+              detail = event['detail']
+              account = event['account']
+              region = event['region']
+              repository_name = detail['repository-name']
+              image_tag = detail.get('image-tag')
+
+              # Do not react on latest
+              if image_tag == 'latest':
+                  print(f"Image tag is 'latest'. Ignoring.")
+                  return
+
+              image_uri = f"{account}.dkr.ecr.{region}.amazonaws.com/{repository_name}:{image_tag}"
+              print(f"New image: {image_uri}")
+
+              # Get current task definition
+              task_def_response = ecs.describe_task_definition(
+                  taskDefinition=os.environ['TASK_DEFINITION_FAMILY']
+              )
+
+              task_def = task_def_response['taskDefinition']
+              print(f"Existing Task Def: {json.dumps(task_def, default=str)}")
+
+              # Create new task definition
+              new_task_def = {
+                  'family': task_def['family'],
+                  'executionRoleArn': task_def.get('executionRoleArn'),
+                  'networkMode': task_def.get('networkMode'),
+                  'requiresCompatibilities': task_def.get('requiresCompatibilities'),
+                  'cpu': task_def.get('cpu'),
+                  'memory': task_def.get('memory'),
+                  'containerDefinitions': []
+              }
+
+              # Update container with new image
+              for container in task_def['containerDefinitions']:
+                  if container['name'] == os.environ['CONTAINER_NAME']:
+                      container['image'] = image_uri
+                  new_task_def['containerDefinitions'].append(container)
+
+              # Register new task definition
+              register_response = ecs.register_task_definition(**new_task_def)
+              new_task_def_arn = register_response['taskDefinition']['taskDefinitionArn']
+              print(f"New task definition: {new_task_def_arn}")
+
+              # Create CodeDeploy deployment with integration test hook
+              appspec = {
+                  'version': 1,
+                  'Resources': [{
+                      'TargetService': {
+                          'Type': 'AWS::ECS::Service',
+                          'Properties': {
+                              'TaskDefinition': new_task_def_arn,
+                              'LoadBalancerInfo': {
+                                  'ContainerName': os.environ['CONTAINER_NAME'],
+                                  'ContainerPort': 80
+                              }
+                          }
+                      }
+                  }],
+                  'Hooks': [{
+                      'AfterAllowTestTraffic': os.environ['INTEGRATION_TEST_FUNCTION_NAME']
+                  }]
+              }
+
+              deployment_response = codedeploy.create_deployment(
+                  applicationName=os.environ['CODEDEPLOY_APPLICATION'],
+                  deploymentGroupName=os.environ['CODEDEPLOY_DEPLOYMENT_GROUP'],
+                  revision={
+                      'revisionType': 'String',
+                      'string': {
+                          'content': json.dumps(appspec)
+                      }
+                  },
+                  description=f'Auto deployment for {image_tag}'
+              )
+
+              deployment_id = deployment_response['deploymentId']
+              print(f"Deployment created: {deployment_id}")
+
+  # =============================================================================
+  # EVENTBRIDGE AUTOMATION
+  # =============================================================================
+  # EventBridge automatically triggers deployments when new images are pushed to ECR
+  # This creates a fully automated CI/CD pipeline: Push Image → Deploy → Test → Go Live
+
+  # EventBridge Rule for ECR image push - Watches for ECR push events
+  # When you push an image to ECR, this rule automatically triggers the deployment
+  # This is the "magic" that makes push-to-deploy work without manual intervention
+  ECRImagePushRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${ProjectName}-ecr-push"
+      Description: "Trigger CodeDeploy when image is pushed to ECR"
+      EventPattern:
+        source:
+          - "aws.ecr" # Listen for ECR service events
+        detail-type:
+          - "ECR Image Action" # Specifically image-related events
+        detail:
+          action-type:
+            - "PUSH" # Only trigger on image push (not pull or delete)
+          repository-name:
+            - Fn::ImportValue: !Sub "${ProjectName}-ECRRepositoryName" # Only our repository
+          result:
+            - "SUCCESS" # Only trigger on successful pushes
+      State: ENABLED # Rule is active
+      Targets:
+        - Arn: !GetAtt TriggerDeploymentFunction.Arn # Call our trigger function
+          Id: "TriggerDeploymentTarget"
+
+  # Permission for EventBridge to invoke Lambda - Allows EventBridge to call our trigger function
+  # Without this permission, EventBridge cannot invoke the Lambda function
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref TriggerDeploymentFunction
+      Action: lambda:InvokeFunction # Allow function invocation
+      Principal: events.amazonaws.com # EventBridge service principal
+      SourceArn: !GetAtt ECRImagePushRule.Arn # Only from our specific rule
+
+# =============================================================================
+# OUTPUTS
+# =============================================================================
+# These outputs provide important information about the deployed resources
+# They can be used by scripts, other stacks, or displayed to users
+
+Outputs:
+  ALBUrl:
+    Description: "Application Load Balancer URL - Main application endpoint"
+    Value: !Sub "http://${ALB.DNSName}"
+    Export:
+      Name: !Sub "${ProjectName}-ALBUrl" # Export for use by other stacks
+
+  TestUrl:
+    Description: "Application Test URL (port 8080) - For testing new deployments"
+    Value: !Sub "http://${ALB.DNSName}:8080"
+    Export:
+      Name: !Sub "${ProjectName}-TestUrl" # Export for use by other stacks
+
+  IntegrationTestFunctionName:
+    Description: "Integration Test Lambda Function Name - For monitoring and debugging"
+    Value: !Ref IntegrationTestFunction
+    Export:
+      Name: !Sub "${ProjectName}-IntegrationTestFunction" # Export for use by other stacks
