@@ -15,7 +15,7 @@ This demo showcases automatic Blue/Green deployments for ECS applications trigge
 │  Application    │◀───│   CodeDeploy     │◀───│   Lambda        │
 │  Load Balancer  │    │  Blue/Green      │    │   Function      │
 └─────────────────┘    │  Deployment      │    └─────────────────┘
-         │              └──────────────────┘
+         │             └──────────────────┘
          ▼
 ┌─────────────────┐
 │   ECS Cluster   │
@@ -28,7 +28,7 @@ This demo showcases automatic Blue/Green deployments for ECS applications trigge
 
 ### Infrastructure (Two CloudFormation Stacks)
 - **ECR Stack**: Container registry (deployed first)
-- **Main Stack**: 
+- **Main Stack**:
   - **VPC**: Simple 2-AZ setup with public subnets
   - **ECS Cluster**: Fargate-only with 2 tasks
   - **Application Load Balancer**: Blue/Green target groups
@@ -128,7 +128,7 @@ demo-ecs-codedeploy/
 
 ## Key Demo Points
 
-- **🚀 Zero-Downtime**: Blue/Green deployment ensures no service interruption  
+- **🚀 Zero-Downtime**: Blue/Green deployment ensures no service interruption
 - **🤖 Fully Automated**: ECR push → EventBridge → Lambda → CodeDeploy
 - **🧪 Integration Testing**: Lambda function validates deployments before traffic switch
 - **🔄 Automatic Rollback**: Failed integration tests trigger automatic rollback
@@ -140,7 +140,7 @@ demo-ecs-codedeploy/
 ## Visual Versions
 
 - **v1.0**: 🔵 Blue gradient (professional look)
-- **v2.0**: 🟠 Orange gradient (modern animations)  
+- **v2.0**: 🟠 Orange gradient (modern animations)
 - **v3.0**: ⚫ Dark cyberpunk (matrix effects)
 - **v4.0**: 🔴 Red failure theme (triggers integration test failure)
 
@@ -245,12 +245,12 @@ Options available:
 
 ## What Makes This Different
 
-This demo focuses on the **core value proposition**: 
+This demo focuses on the **core value proposition**:
 - ECR push automatically triggers safe Blue/Green deployments with integration testing
 - Lambda-based quality gates ensure deployment safety
 - Automatic rollback when tests fail (demonstrated with v4.0)
 - No complex CI/CD pipelines to explain
-- No CodeBuild complexity 
+- No CodeBuild complexity
 - Just the essential: **Push → Event → Test → Deploy (or Rollback)**
 
 Perfect for showing stakeholders how modern deployment automation works with built-in safety!
