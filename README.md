@@ -188,7 +188,7 @@ demo-ecs-codedeploy/
 ./scripts/get-alb-url.sh --open
 # You should see the blue v1.0 theme
 
-# Step 3: Push v2.0 and watch magic happen! (~1 minute)
+# Step 3: Push v2.0 and watch magic happen! (~6 minutes)
 ./scripts/build-and-deploy.sh v2.0
 # → ECR push → EventBridge → CodePipeline → CodeDeploy → Blue/Green deployment!
 # Refresh browser to see orange v2.0 theme after deployment completes
