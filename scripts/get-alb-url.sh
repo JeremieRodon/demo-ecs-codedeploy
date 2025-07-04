@@ -30,7 +30,7 @@ show_usage() {
     echo "Options:"
     echo "  --help, -h          Show this help message"
     echo "  --region REGION     Override AWS region (default: $REGION)"
-    echo "  --stack-name NAME   Override stack name (default: ${PROJECT_NAME})"
+    echo "  --stack-name NAME   Override stack name (default: ${PROJECT_NAME}-application)"
     echo "  --open              Open URL in default browser (macOS/Linux)"
     echo "  --health            Check health endpoint"
     echo "  --json              Output in JSON format"
@@ -71,7 +71,7 @@ get_stack_output() {
 
 # Function to get ALB information
 get_alb_info() {
-    local stack_name="$PROJECT_NAME"
+    local stack_name="${PROJECT_NAME}-application"
 
     if [[ -n "$CUSTOM_STACK_NAME" ]]; then
         stack_name="$CUSTOM_STACK_NAME"

@@ -7,8 +7,8 @@ set -e  # Exit on any error
 
 # Configuration
 PROJECT_NAME="ecs-codedeploy-demo"
-ECR_STACK_NAME="${PROJECT_NAME}-ecr"
-MAIN_STACK_NAME="$PROJECT_NAME"
+FOUNDATIONS_STACK_NAME="${PROJECT_NAME}-foundations"
+APPLICATION_STACK_NAME="${PROJECT_NAME}-application"
 REGION="${AWS_DEFAULT_REGION:-us-east-1}"
 
 # Colors for output
@@ -57,7 +57,7 @@ check_ecr_repository() {
     print_status $BLUE "Checking ECR repository..."
 
     local ecr_repo_name=$(aws cloudformation describe-stacks \
-        --stack-name "$ECR_STACK_NAME" \
+        --stack-name "$FOUNDATIONS_STACK_NAME" \
         --region "$REGION" \
         --query 'Stacks[0].Outputs[?OutputKey==`ECRRepositoryName`].OutputValue' \
         --output text 2>/dev/null || echo "")
@@ -114,7 +114,7 @@ check_ecs_service() {
         --query 'services[0].desiredCount' \
         --output text 2>/dev/null || echo "0")
 
-    if [[ "$running_count" -eq "$desired_count" && "$running_count" -gt 0 ]]; then
+    if [[ "$running_count" -ge "$desired_count" && "$running_count" -gt 0 ]]; then
         print_status $GREEN "✓ ECS service is healthy ($running_count/$desired_count tasks running)"
         return 0
     else
@@ -128,7 +128,7 @@ check_alb_health() {
     print_status $BLUE "Checking ALB and application health..."
 
     local alb_url=$(aws cloudformation describe-stacks \
-        --stack-name "$MAIN_STACK_NAME" \
+        --stack-name "$APPLICATION_STACK_NAME" \
         --region "$REGION" \
         --query 'Stacks[0].Outputs[?OutputKey==`ALBUrl`].OutputValue' \
         --output text 2>/dev/null || echo "")
@@ -189,7 +189,7 @@ check_integration_test() {
     print_status $BLUE "Checking integration test Lambda function..."
 
     local function_name=$(aws cloudformation describe-stacks \
-        --stack-name "$MAIN_STACK_NAME" \
+        --stack-name "$APPLICATION_STACK_NAME" \
         --region "$REGION" \
         --query 'Stacks[0].Outputs[?OutputKey==`IntegrationTestFunctionName`].OutputValue' \
         --output text 2>/dev/null || echo "")
@@ -208,7 +208,7 @@ check_integration_test() {
 
             # Check test URL availability
             local test_url=$(aws cloudformation describe-stacks \
-                --stack-name "$MAIN_STACK_NAME" \
+                --stack-name "$APPLICATION_STACK_NAME" \
                 --region "$REGION" \
                 --query 'Stacks[0].Outputs[?OutputKey==`TestUrl`].OutputValue' \
                 --output text 2>/dev/null || echo "")
@@ -232,38 +232,38 @@ check_integration_test() {
 
 # Function to show next steps
 show_next_steps() {
-    local ecr_ok=$1
-    local main_ok=$2
+    local foundations_ok=$1
+    local application_ok=$2
     local ecr_has_images=$3
     local app_healthy=$4
 
     echo ""
     print_status $YELLOW "=== NEXT STEPS ==="
 
-    if [[ "$ecr_ok" -ne 0 ]]; then
-        print_status $BLUE "1. Deploy ECR stack:"
-        print_status $BLUE "   cd cloudformation && ./deploy-ecr.sh"
+    if [[ "$foundations_ok" -ne 0 ]]; then
+        print_status $BLUE "1. Deploy foundations stack:"
+        print_status $BLUE "   ./scripts/deploy-foundations.sh"
     elif [[ "$ecr_has_images" -ne 0 ]]; then
         print_status $BLUE "1. Build and push initial image:"
-        print_status $BLUE "   cd scripts && ./build-and-deploy.sh v1.0"
-    elif [[ "$main_ok" -ne 0 ]]; then
-        print_status $BLUE "1. Deploy main infrastructure:"
-        print_status $BLUE "   cd cloudformation && ./deploy.sh"
+        print_status $BLUE "   ./scripts/build-and-deploy.sh v1.0"
+    elif [[ "$application_ok" -ne 0 ]]; then
+        print_status $BLUE "1. Deploy application infrastructure:"
+        print_status $BLUE "   ./scripts/deploy-application.sh"
     elif [[ "$app_healthy" -ne 0 ]]; then
         print_status $BLUE "1. Wait for ECS tasks to become healthy (2-3 minutes)"
-        print_status $BLUE "2. Check application: ./get-alb-url.sh --health"
+        print_status $BLUE "2. Check application: ./scripts/get-alb-url.sh --health"
     else
         print_status $GREEN "🎉 Everything looks good! Try deploying a new version:"
-        print_status $BLUE "   cd scripts && ./build-and-deploy.sh v2.0"
+        print_status $BLUE "   ./scripts/build-and-deploy.sh v2.0"
         print_status $BLUE ""
         print_status $BLUE "Test integration testing with failure demo:"
-        print_status $BLUE "   ./build-and-deploy.sh v4.0  # Should fail and rollback"
+        print_status $BLUE "   ./scripts/build-and-deploy.sh v4.0  # Should fail and rollback"
         print_status $BLUE ""
         print_status $BLUE "Or access your application:"
-        print_status $BLUE "   ./get-alb-url.sh --open"
+        print_status $BLUE "   ./scripts/get-alb-url.sh --open"
         print_status $BLUE ""
         print_status $BLUE "When done, clean up all resources:"
-        print_status $BLUE "   cd ../cloudformation && ./cleanup.sh"
+        print_status $BLUE "   ./cleanup.sh"
     fi
 }
 
@@ -274,8 +274,8 @@ main() {
     print_status $BLUE "Project: $PROJECT_NAME"
     echo ""
 
-    local ecr_ok=0
-    local main_ok=0
+    local foundations_ok=0
+    local application_ok=0
     local ecr_has_images=0
     local ecs_ok=0
     local alb_ok=0
@@ -283,18 +283,18 @@ main() {
     local integration_test_ok=0
 
     # Check stacks
-    check_stack_status "$ECR_STACK_NAME" "ECR Stack" || ecr_ok=1
-    check_stack_status "$MAIN_STACK_NAME" "Main Stack" || main_ok=1
+    check_stack_status "$FOUNDATIONS_STACK_NAME" "Foundations Stack" || foundations_ok=1
+    check_stack_status "$APPLICATION_STACK_NAME" "Application Stack" || application_ok=1
 
     echo ""
 
     # Check ECR repository and images
-    if [[ "$ecr_ok" -eq 0 ]]; then
+    if [[ "$foundations_ok" -eq 0 ]]; then
         check_ecr_repository || ecr_has_images=1
     fi
 
-    # Check services if main stack is deployed
-    if [[ "$main_ok" -eq 0 ]]; then
+    # Check services if application stack is deployed
+    if [[ "$application_ok" -eq 0 ]]; then
         echo ""
         check_ecs_service || ecs_ok=1
         check_alb_health || alb_ok=1
@@ -309,17 +309,17 @@ main() {
     local total_checks=0
     local passed_checks=0
 
-    # ECR Stack
+    # Foundations Stack
     total_checks=$((total_checks + 1))
-    if [[ "$ecr_ok" -eq 0 ]]; then
+    if [[ "$foundations_ok" -eq 0 ]]; then
         passed_checks=$((passed_checks + 1))
-        print_status $GREEN "✓ ECR Stack"
+        print_status $GREEN "✓ Foundations Stack"
     else
-        print_status $RED "✗ ECR Stack"
+        print_status $RED "✗ Foundations Stack"
     fi
 
     # ECR Images
-    if [[ "$ecr_ok" -eq 0 ]]; then
+    if [[ "$foundations_ok" -eq 0 ]]; then
         total_checks=$((total_checks + 1))
         if [[ "$ecr_has_images" -eq 0 ]]; then
             passed_checks=$((passed_checks + 1))
@@ -329,17 +329,17 @@ main() {
         fi
     fi
 
-    # Main Stack
+    # Application Stack
     total_checks=$((total_checks + 1))
-    if [[ "$main_ok" -eq 0 ]]; then
+    if [[ "$application_ok" -eq 0 ]]; then
         passed_checks=$((passed_checks + 1))
-        print_status $GREEN "✓ Main Stack"
+        print_status $GREEN "✓ Application Stack"
     else
-        print_status $RED "✗ Main Stack"
+        print_status $RED "✗ Application Stack"
     fi
 
-    # Services (only if main stack exists)
-    if [[ "$main_ok" -eq 0 ]]; then
+    # Services (only if application stack exists)
+    if [[ "$application_ok" -eq 0 ]]; then
         total_checks=$((total_checks + 4))
 
         if [[ "$ecs_ok" -eq 0 ]]; then
@@ -377,12 +377,12 @@ main() {
     if [[ "$passed_checks" -eq "$total_checks" ]]; then
         echo ""
         print_status $BLUE "💡 Cleanup Resources:"
-        print_status $BLUE "   Complete cleanup: cd ../cloudformation && ./cleanup.sh"
-        print_status $BLUE "   Task definitions only: ./cleanup-task-definitions.sh"
+        print_status $BLUE "   Complete cleanup: ./cleanup.sh"
+        print_status $BLUE "   Task definitions only: ./scripts/cleanup-task-definitions.sh"
     fi
 
     # Show next steps
-    show_next_steps "$ecr_ok" "$main_ok" "$ecr_has_images" "$alb_ok"
+    show_next_steps "$foundations_ok" "$application_ok" "$ecr_has_images" "$alb_ok"
 
     # Exit with appropriate code
     if [[ "$passed_checks" -eq "$total_checks" ]]; then

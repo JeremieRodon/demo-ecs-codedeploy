@@ -175,12 +175,12 @@ push_to_ecr() {
 
     print_status $BLUE "Pushing image to ECR..."
 
-    # Get ECR repository URI from ECR stack
-    local ecr_stack_name="${PROJECT_NAME}-ecr"
-    local ecr_uri=$(get_stack_output "$ecr_stack_name" "ECRRepositoryURI")
+    # Get ECR repository URI from foundations stack
+    local foundations_stack_name="${PROJECT_NAME}-foundations"
+    local ecr_uri=$(get_stack_output "$foundations_stack_name" "ECRRepositoryURI")
     if [[ -z "$ecr_uri" ]]; then
-        print_status $RED "ERROR: Could not get ECR repository URI. Is the ECR stack deployed?"
-        print_status $YELLOW "Deploy the ECR stack first with: cd cloudformation && ./deploy-ecr.sh"
+        print_status $RED "ERROR: Could not get ECR repository URI. Is the foundations stack deployed?"
+        print_status $YELLOW "Deploy the foundations stack first with: ./scripts/deploy-foundations.sh"
         exit 1
     fi
 
@@ -213,8 +213,9 @@ trigger_codebuild() {
 show_deployment_status() {
     print_status $BLUE "Checking deployment status..."
 
-    # Get ALB URL from main stack
-    local alb_url=$(get_stack_output "$PROJECT_NAME" "ALBUrl")
+    # Get ALB URL from application stack
+    local application_stack_name="${PROJECT_NAME}-application"
+    local alb_url=$(get_stack_output "$application_stack_name" "ALBUrl")
     if [[ -n "$alb_url" ]]; then
         print_status $GREEN "Application URL: $alb_url"
     fi

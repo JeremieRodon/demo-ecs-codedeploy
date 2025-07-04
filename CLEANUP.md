@@ -5,8 +5,8 @@ This document explains the comprehensive cleanup process for the ECS CodeDeploy 
 ## Overview
 
 The demo creates several types of resources:
-- **CloudFormation managed**: VPC, ECS cluster, ALB, CodeDeploy application, Lambda functions
-- **Dynamically created**: ECS task definitions (created by Lambda during deployments)
+- **CloudFormation managed**: VPC, ECS cluster, ALB, CodeDeploy application, CodePipeline, Lambda functions
+- **Dynamically created**: ECS task definitions (created by CodePipeline during deployments)
 - **ECR resources**: Docker images in the repository
 
 The enhanced cleanup process ensures all resources are properly removed, including those created outside of CloudFormation.
@@ -16,7 +16,7 @@ The enhanced cleanup process ensures all resources are properly removed, includi
 ### Single Command Cleanup
 
 ```bash
-cd cloudformation && ./cleanup.sh
+./cleanup.sh
 ```
 
 This comprehensive script performs the following actions:
@@ -28,14 +28,14 @@ This comprehensive script performs the following actions:
    - Verifies cleanup completion
 
 2. **🗑️ CloudFormation Stack Deletion**
-   - Deletes the main infrastructure stack
+   - Deletes the application infrastructure stack
+   - Deletes the foundations infrastructure stack
    - Waits for complete deletion
    - Handles dependencies automatically
 
 3. **📦 ECR Repository Cleanup**
    - Empties the ECR repository (removes all images)
-   - Deletes the ECR repository stack
-   - Removes the repository completely
+   - Removes the repository as part of foundations stack deletion
 
 4. **🔍 Verification**
    - Checks for remaining task definitions
@@ -53,13 +53,13 @@ This comprehensive script performs the following actions:
   ✅ Deregistered: ecs-codedeploy-demo:3
   ✅ Deregistered: ecs-codedeploy-demo:4
   ✅ Deregistered: ecs-codedeploy-demo:5
-🗑️  Deleting main stack...
-⏳ Waiting for main stack deletion to complete...
-✅ Main stack deleted successfully!
+🗑️  Deleting application stack...
+⏳ Waiting for application stack deletion to complete...
+✅ Application stack deleted successfully!
 📦 Emptying ECR repository...
-🗑️  Deleting ECR stack...
-⏳ Waiting for ECR stack deletion to complete...
-✅ ECR stack deleted successfully!
+🗑️  Deleting foundations stack...
+⏳ Waiting for foundations stack deletion to complete...
+✅ Foundations stack deleted successfully!
 🔍 Verifying cleanup completion...
 ✅ All task definitions cleaned up successfully
 ✅ No active deployments found
@@ -73,7 +73,7 @@ This comprehensive script performs the following actions:
 Clean up only the task definitions without touching CloudFormation stacks:
 
 ```bash
-cd scripts && ./cleanup-task-definitions.sh
+./scripts/cleanup-task-definitions.sh
 ```
 
 **Use cases:**
@@ -91,7 +91,7 @@ cd scripts && ./cleanup-task-definitions.sh
 See what would be cleaned up without making changes:
 
 ```bash
-cd scripts && ./cleanup-task-definitions.sh --dry-run
+./scripts/cleanup-task-definitions.sh --dry-run
 ```
 
 ## Troubleshooting Cleanup Issues
@@ -139,8 +139,8 @@ If automatic cleanup fails, follow these steps:
 
 4. **Force Delete CloudFormation Stacks**
    ```bash
-   aws cloudformation delete-stack --stack-name ecs-codedeploy-demo
-   aws cloudformation delete-stack --stack-name ecs-codedeploy-demo-ecr
+   aws cloudformation delete-stack --stack-name ecs-codedeploy-demo-application
+   aws cloudformation delete-stack --stack-name ecs-codedeploy-demo-foundations
    ```
 
 ### Verification Commands
@@ -170,10 +170,11 @@ CloudFormation doesn't track resources created dynamically by Lambda functions:
 ### Task Definition Accumulation
 
 Each deployment creates a new task definition revision:
-- v1.0 deployment → revision 1
-- v2.0 deployment → revision 2
-- v3.0 deployment → revision 3
-- v4.0 deployment → revision 4
+- Initial CloudFormation deployment → revision 1
+- v1.0 deployment → revision 2
+- v2.0 deployment → revision 3
+- v3.0 deployment → revision 4
+- v4.0 deployment → revision 5
 - Failed deployments → additional revisions
 
 Without cleanup, these accumulate and:
@@ -215,6 +216,7 @@ Resources that incur costs:
 - **ECR storage**: Charged per GB stored
 - **Lambda invocations**: Charged per invocation
 - **CloudWatch logs**: Charged per GB stored
+- **CodePipeline**: Charged per pipeline execution
 
 The cleanup script ensures all these resources are properly removed to avoid ongoing charges.
 
@@ -237,7 +239,6 @@ Include cleanup in your CI/CD pipeline:
 # Example GitHub Actions step
 - name: Cleanup Demo Resources
   run: |
-    cd cloudformation
     ./cleanup.sh
 ```
 
@@ -247,17 +248,13 @@ If you accidentally run cleanup and need to restore:
 
 1. **Redeploy the infrastructure:**
    ```bash
-   cd cloudformation && ./deploy-ecr.sh
-   ../scripts/build-and-deploy.sh v1.0
    ./deploy.sh
    ```
 
 2. **Rebuild and deploy applications:**
    ```bash
-   cd scripts
-   ./build-and-deploy.sh v1.0
-   ./build-and-deploy.sh v2.0
-   ./build-and-deploy.sh v3.0
+   ./scripts/build-and-deploy.sh v2.0
+   ./scripts/build-and-deploy.sh v3.0
    ```
 
 The demo is designed to be easily reproducible, so full recovery takes only a few minutes.

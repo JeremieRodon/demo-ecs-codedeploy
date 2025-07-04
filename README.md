@@ -27,14 +27,18 @@ This demo showcases automatic Blue/Green deployments for ECS applications trigge
 ## Components
 
 ### Infrastructure (Two CloudFormation Stacks)
-- **ECR Stack**: Container registry (deployed first)
-- **Main Stack**:
+- **Foundations Stack**: Core infrastructure (deployed first)
   - **VPC**: Simple 2-AZ setup with public subnets
-  - **ECS Cluster**: Fargate-only with 2 tasks
+  - **ECS Cluster**: Fargate-only cluster
+  - **ECR Repository**: Container registry
+  - **Lambda Functions**: Custom resource helpers
+- **Application Stack**: Application infrastructure
   - **Application Load Balancer**: Blue/Green target groups
+  - **ECS Service**: Fargate-based with 2 tasks
   - **CodeDeploy Application**: Manages Blue/Green deployments
+  - **CodePipeline**: Automated deployment pipeline
   - **EventBridge Rule**: Triggers on ECR push events
-  - **Lambda Function**: Creates new task definition and triggers deployment
+  - **Lambda Function**: Integration testing for deployments
 
 ### Application
 - **Simple Apache Web Server**: Displays webpage with version information
@@ -43,13 +47,32 @@ This demo showcases automatic Blue/Green deployments for ECS applications trigge
 
 ## Demo Flow (7 minutes)
 
-1. **Create ECR Repository**: Deploy ECR stack first
+1. **Deploy Foundations**: Deploy foundations stack (VPC, ECS cluster, ECR)
 2. **Build and Deploy v1.0**: Build and push initial image
-3. **Deploy Main Infrastructure**: Deploy the main demo stack
+3. **Deploy Application Infrastructure**: Deploy the application stack
 4. **Push v2.0**: ECR push automatically triggers Blue/Green deployment with integration tests
 5. **Watch Magic**: CodeDeploy seamlessly switches traffic after tests pass
 6. **Push v3.0**: Another automatic deployment to show reliability
 7. **Push v4.0**: Demonstrates automatic rollback when integration tests fail
+
+## CodePipeline Sequential Deployment Advantage
+
+One of the major benefits of using CodePipeline (instead of Lambda triggers) is **strict deployment ordering**:
+
+- **Sequential Processing**: CodePipeline ensures deployments happen one at a time
+- **No Race Conditions**: Rapid successive ECR pushes won't cause conflicts
+- **Reliable Queuing**: New deployments wait for current one to complete before starting
+- **Crash Prevention**: Eliminates Lambda crashes from attempting concurrent CodeDeploy operations
+
+**Example Scenario**:
+```bash
+# These rapid deployments are now safe:
+./scripts/build-and-deploy.sh v2.0
+./scripts/build-and-deploy.sh v3.0  # Waits for v2.0 to complete
+./scripts/build-and-deploy.sh v2.0  # Waits for v3.0 to complete
+```
+
+Previously with Lambda triggers, rapid deployments would cause failures. Now CodePipeline gracefully handles the queue.
 
 ## Prerequisites
 
@@ -59,54 +82,47 @@ This demo showcases automatic Blue/Green deployments for ECS applications trigge
 
 ## Quick Start
 
-1. **Create ECR Repository** (~1 minute):
-   ```bash
-   cd cloudformation && ./deploy-ecr.sh
-   ```
-
-2. **Build and Deploy v1.0**:
-   ```bash
-   ../scripts/build-and-deploy.sh v1.0
-   ```
-
-3. **Deploy Main Infrastructure** (~5 minutes):
+1. **Deploy Complete Infrastructure** (~6 minutes):
    ```bash
    ./deploy.sh
    ```
+   This automatically:
+   - Deploys foundations stack (VPC, ECS cluster, ECR)
+   - Builds and pushes v1.0 image (if ECR is empty)
+   - Deploys application stack (ALB, CodeDeploy, CodePipeline)
 
-4. **Access Application**:
+2. **Access Application**:
    ```bash
-   ../scripts/get-alb-url.sh --open
+   ./scripts/get-alb-url.sh --open
    ```
 
-5. **Trigger Automatic Deployment** (push v2.0 to see magic happen):
+3. **Trigger Automatic Deployment** (push v2.0 to see magic happen):
    ```bash
-   ../scripts/build-and-deploy.sh v2.0
+   ./scripts/build-and-deploy.sh v2.0
    ```
-   → ECR push → EventBridge → Lambda → CodeDeploy → Blue/Green deployment!
+   → ECR push → EventBridge → CodePipeline → CodeDeploy → Blue/Green deployment!
 
-6. **Try Another Version**:
+4. **Try Another Version**:
    ```bash
-   ../scripts/build-and-deploy.sh v3.0  # Dark theme
+   ./scripts/build-and-deploy.sh v3.0  # Dark theme
    ```
 
-7. **Test Failure and Rollback** (demonstrates integration testing):
+5. **Test Failure and Rollback** (demonstrates integration testing):
    ```bash
-   ../scripts/build-and-deploy.sh v4.0  # This will fail integration tests and rollback!
+   ./scripts/build-and-deploy.sh v4.0  # This will fail integration tests and rollback!
    ```
 
 ## Directory Structure
 
 ```
 demo-ecs-codedeploy/
-├── README.md                        # This file
-├── cloudformation/                  # CloudFormation templates
-│   ├── ecr-stack.yaml              # ECR repository (deploy first)
-│   ├── demo-stack.yaml             # Main infrastructure
-│   ├── deploy-ecr.sh               # Deploy ECR stack
-│   ├── deploy.sh                   # Deploy main stack
-│   └── cleanup.sh                  # Delete both stacks
-├── application/                     # Application source code
+├── README.md                       # This file
+├── deploy.sh                       # Complete deployment script
+├── cleanup.sh                      # Complete cleanup script
+├── cloudformation/                 # CloudFormation templates
+│   ├── 1-demo-fundations.yaml      # Foundations stack (VPC, ECS, ECR)
+│   └── 2-demo-application.yaml     # Application stack (ALB, CodeDeploy, Pipeline)
+├── application/                    # Application source code
 │   ├── v1.0/                       # Blue gradient theme
 │   │   ├── Dockerfile
 │   │   └── index.html
@@ -122,6 +138,9 @@ demo-ecs-codedeploy/
 │   └── buildspec.yml               # (Not used - simplified approach)
 └── scripts/                        # Helper scripts
     ├── build-and-deploy.sh         # Build and push to ECR
+    ├── cleanup-task-definitions.sh # Clean up ECS task definitions
+    ├── deploy-application.sh       # Deploy application stack
+    ├── deploy-foundations.sh       # Deploy foundations stack
     ├── get-alb-url.sh              # Get ALB URL and health check
     └── validate-setup.sh           # Validate deployment status
 ```
@@ -129,9 +148,10 @@ demo-ecs-codedeploy/
 ## Key Demo Points
 
 - **🚀 Zero-Downtime**: Blue/Green deployment ensures no service interruption
-- **🤖 Fully Automated**: ECR push → EventBridge → Lambda → CodeDeploy
+- **🤖 Fully Automated**: ECR push → EventBridge → CodePipeline → CodeDeploy
 - **🧪 Integration Testing**: Lambda function validates deployments before traffic switch
 - **🔄 Automatic Rollback**: Failed integration tests trigger automatic rollback
+- **⚡ Sequential Deployments**: CodePipeline ensures safe ordering of rapid deployments
 - **👀 Visual Impact**: Each version has completely different styling
 - **⚡ Fast Setup**: Two simple CloudFormation stacks, deploy in ~6 minutes
 - **🔄 Repeatable**: Push any version to trigger automatic deployment
@@ -158,31 +178,29 @@ demo-ecs-codedeploy/
 ## Demo Script (8 minutes)
 
 ```bash
-# Step 1: Create ECR repository (~1 minute)
-cd cloudformation && ./deploy-ecr.sh
-
-# Step 2: Build and push v1.0 (~1 minute)
-../scripts/build-and-deploy.sh v1.0
-
-# Step 3: Deploy main infrastructure (~3 minutes)
+# Step 1: Deploy complete infrastructure (~6 minutes)
 ./deploy.sh
+# This automatically:
+# - Deploys foundations stack (VPC, ECS cluster, ECR)
+# - Builds and pushes v1.0 image (if ECR is empty)
+# - Deploys application stack (ALB, CodeDeploy, CodePipeline)
 
-# Step 4: Show running application
-../scripts/get-alb-url.sh --open
+# Step 2: Show running application
+./scripts/get-alb-url.sh --open
 # You should see the blue v1.0 theme
 
-# Step 5: Push v2.0 and watch magic happen! (~1 minute)
-../scripts/build-and-deploy.sh v2.0
-# → ECR push → EventBridge → Lambda → CodeDeploy → Blue/Green deployment!
+# Step 3: Push v2.0 and watch magic happen! (~1 minute)
+./scripts/build-and-deploy.sh v2.0
+# → ECR push → EventBridge → CodePipeline → CodeDeploy → Blue/Green deployment!
 # Refresh browser to see orange v2.0 theme after deployment completes
 
-# Step 6: Push v3.0 for dramatic effect
-../scripts/build-and-deploy.sh v3.0
+# Step 4: Push v3.0 for dramatic effect
+./scripts/build-and-deploy.sh v3.0
 # → Another automatic deployment
 # Refresh browser to see dark cyberpunk v3.0 theme
 
-# Step 7: Demonstrate failure and rollback with v4.0
-../scripts/build-and-deploy.sh v4.0
+# Step 5: Demonstrate failure and rollback with v4.0
+./scripts/build-and-deploy.sh v4.0
 # → This will fail integration tests and automatically rollback!
 # Check AWS console to see the rollback in action
 ```
@@ -210,12 +228,12 @@ This script will:
 Single command cleans up everything including task definitions:
 
 ```bash
-cd cloudformation && ./cleanup.sh
+./cleanup.sh
 ```
 
 This enhanced cleanup script will:
 - 🗂️ **Clean up all task definitions** (created outside CloudFormation)
-- 🗑️ **Delete both CloudFormation stacks**
+- 🗑️ **Delete both CloudFormation stacks** (foundations and application)
 - 📦 **Empty and delete ECR repository**
 - 🔍 **Verify complete cleanup**
 
@@ -224,7 +242,7 @@ This enhanced cleanup script will:
 If you only need to clean up task definitions (useful during development):
 
 ```bash
-cd scripts && ./cleanup-task-definitions.sh
+./scripts/cleanup-task-definitions.sh
 ```
 
 Options available:
@@ -235,9 +253,9 @@ Options available:
 ## Troubleshooting
 
 - **Stack fails to deploy**: Check IAM permissions
-- **Main stack fails**: Ensure ECR stack is deployed first
+- **Application stack fails**: Ensure foundations stack is deployed first
 - **App not accessible**: Wait 2-3 minutes for ECS tasks to start, run `./scripts/validate-setup.sh`
-- **Deployment not triggered**: Check EventBridge rule in AWS console
+- **Deployment not triggered**: Check EventBridge rule and CodePipeline in AWS console
 - **Integration test fails**: Check Lambda function logs in CloudWatch
 - **v4.0 doesn't rollback**: Check CodeDeploy application logs and Lambda execution
 - **Build fails**: Ensure Docker is running locally
@@ -247,10 +265,12 @@ Options available:
 
 This demo focuses on the **core value proposition**:
 - ECR push automatically triggers safe Blue/Green deployments with integration testing
+- CodePipeline orchestrates the entire deployment workflow with strict ordering
 - Lambda-based quality gates ensure deployment safety
 - Automatic rollback when tests fail (demonstrated with v4.0)
-- No complex CI/CD pipelines to explain
-- No CodeBuild complexity
-- Just the essential: **Push → Event → Test → Deploy (or Rollback)**
+- EventBridge-driven automation for real-time deployment triggers
+- **Sequential deployment safety**: No race conditions from rapid successive pushes
+- Complete infrastructure-as-code with CloudFormation
+- Just the essential: **Push → Event → Pipeline → Test → Deploy (or Rollback)**
 
-Perfect for showing stakeholders how modern deployment automation works with built-in safety!
+Perfect for showing stakeholders how modern deployment automation works with built-in safety and reliability!

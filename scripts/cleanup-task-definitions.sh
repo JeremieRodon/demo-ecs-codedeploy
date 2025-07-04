@@ -96,30 +96,6 @@ get_task_definition_details() {
     echo "$revision|$status|$created"
 }
 
-# Function to display task definitions
-display_task_definitions() {
-    local task_def_arns=$1
-
-    if [[ -z "$task_def_arns" || "$task_def_arns" == "None" ]]; then
-        return 1
-    fi
-
-    print_status $BLUE "Task definitions found:"
-    echo ""
-    printf "%-10s %-12s %-25s %s\n" "Revision" "Status" "Created" "ARN"
-    printf "%-10s %-12s %-25s %s\n" "--------" "------" "-------" "---"
-
-    echo "$task_def_arns" | tr '\t' '\n' | while read -r arn; do
-        if [[ -n "$arn" ]]; then
-            local details=$(get_task_definition_details "$arn")
-            IFS='|' read -r revision status created <<< "$details"
-            printf "%-10s %-12s %-25s %s\n" "$revision" "$status" "$created" "$(basename "$arn")"
-        fi
-    done
-
-    echo ""
-}
-
 # Function to deregister task definitions
 deregister_task_definitions() {
     local task_def_arns=$1
@@ -130,7 +106,7 @@ deregister_task_definitions() {
     local deregister_count=0
     local deregister_failed=0
 
-    echo "$task_def_arns" | tr '\t' '\n' | while read -r arn; do
+    while IFS= read -r arn; do
         if [[ -n "$arn" ]]; then
             if [[ "$dry_run" == "true" ]]; then
                 print_status $BLUE "  [DRY RUN] Would deregister: $(basename "$arn")"
@@ -148,7 +124,7 @@ deregister_task_definitions() {
                 fi
             fi
         fi
-    done
+    done < <(echo "$task_def_arns" | tr '\t' '\n')
 
     if [[ "$dry_run" != "true" ]]; then
         print_status $BLUE "Deregistration summary: $deregister_count succeeded, $deregister_failed failed"
@@ -167,7 +143,7 @@ delete_task_definitions() {
     local delete_count=0
     local delete_failed=0
 
-    echo "$task_def_arns" | tr '\t' '\n' | while read -r arn; do
+    while IFS= read -r arn; do
         if [[ -n "$arn" ]]; then
             if [[ "$dry_run" == "true" ]]; then
                 print_status $BLUE "  [DRY RUN] Would delete: $(basename "$arn")"
@@ -185,7 +161,7 @@ delete_task_definitions() {
                 fi
             fi
         fi
-    done
+    done < <(echo "$task_def_arns" | tr '\t' '\n')
 
     if [[ "$dry_run" != "true" ]]; then
         print_status $BLUE "Deletion summary: $delete_count succeeded, $delete_failed failed"
@@ -250,12 +226,9 @@ main() {
         exit 0
     fi
 
-    local task_count=$(echo "$task_def_arns" | wc -w)
+    local task_count=$(echo "$task_def_arns" | tr '\t' '\n' | grep -c '.')
     print_status $GREEN "Found $task_count task definition(s)"
     echo ""
-
-    # Display task definitions
-    display_task_definitions "$task_def_arns"
 
     # Confirm action (unless dry run or force)
     if [[ "$dry_run" != "true" ]]; then
@@ -282,7 +255,7 @@ main() {
         local remaining_count=0
 
         if [[ -n "$remaining" && "$remaining" != "None" ]]; then
-            remaining_count=$(echo "$remaining" | wc -w)
+            remaining_count=$(echo "$remaining" | tr '\t' '\n' | grep -c '.')
         fi
 
         if [[ $remaining_count -eq 0 ]]; then

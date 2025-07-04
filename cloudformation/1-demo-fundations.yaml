@@ -1,0 +1,373 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "ECR Repository for ECS CodeDeploy Demo"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: "ecs-codedeploy-demo"
+    Description: "Name of the project"
+
+Resources:
+  # =============================================================================
+  # NETWORKING INFRASTRUCTURE
+  # =============================================================================
+  # This section creates the basic networking foundation:
+  # - VPC (Virtual Private Cloud) - your own isolated network in AWS
+  # - Public subnets in 2 availability zones - for high availability
+  # - Internet Gateway - allows internet access
+  # - Route table - defines how traffic flows
+  # VPC - Your own private network in AWS (like your office network)
+  # CIDR 10.0.0.0/16 gives us 65,536 IP addresses to work with
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: "10.0.0.0/16" # Network range: 10.0.0.0 to 10.0.255.255
+      EnableDnsHostnames: true # Allow resources to have DNS names
+      EnableDnsSupport: true # Enable DNS resolution
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-vpc"
+
+  # Internet Gateway - The "front door" that allows internet access to/from our VPC
+  # Think of it as the router that connects your office network to the internet
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-igw"
+
+  # Attach the Internet Gateway to our VPC
+  # This is like plugging the router into your office network
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  # Public Subnet 1 - First subnet in Availability Zone 1
+  # "Public" means resources here can reach the internet and be reached from internet
+  # We use multiple AZs for high availability (if one datacenter fails, the other keeps running)
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs ""] # First available AZ in this region
+      CidrBlock: "10.0.1.0/24" # 256 IP addresses (10.0.1.0 to 10.0.1.255)
+      MapPublicIpOnLaunch: true # Auto-assign public IPs to resources
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-public-subnet-1"
+
+  # Public Subnet 2 - Second subnet in Availability Zone 2
+  # Having resources in multiple AZs provides redundancy and higher availability
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs ""] # Second available AZ in this region
+      CidrBlock: "10.0.2.0/24" # 256 IP addresses (10.0.2.0 to 10.0.2.255)
+      MapPublicIpOnLaunch: true # Auto-assign public IPs to resources
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-public-subnet-2"
+
+  # Route Table - Defines how network traffic is routed
+  # Think of it as a GPS for network packets - tells them where to go
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-public-rt"
+
+  # Default Route - Sends all internet traffic (0.0.0.0/0) to the Internet Gateway
+  # This is like setting your default gateway in network settings
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment # Must wait for gateway to be attached first
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: "0.0.0.0/0" # All internet traffic (anywhere)
+      GatewayId: !Ref InternetGateway # Send it to the Internet Gateway
+
+  # Associate the route table with subnet 1
+  # This tells subnet 1 to use our routing rules
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+
+  # Associate the route table with subnet 2
+  # This tells subnet 2 to use our routing rules
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
+
+  # =============================================================================
+  # ECS (CONTAINER ORCHESTRATION) INFRASTRUCTURE
+  # =============================================================================
+  # ECS = Elastic Container Service - AWS's container orchestration service
+  # Think of it as a smart system that runs and manages your Docker containers
+  # It's like Kubernetes but AWS-managed
+
+  # ECS Cluster - A logical grouping of compute resources
+  # This is where our containers will run
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref ProjectName
+      CapacityProviders:
+        - FARGATE # Use Fargate (serverless containers, no EC2 to manage)
+
+  # ECR Repository
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Ref ProjectName
+      ImageScanningConfiguration:
+        ScanOnPush: false
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep only 5 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 5
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+
+  # =============================================================================
+  # LAMBDA CUSTOM RESOURCE FOR S3 OBJECT CREATION
+  # =============================================================================
+
+  # CloudWatch Log Group for CodePipeline Artifact Creator Lambda
+  CodePipelineArtifactCreatorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-codepipeline-artifact-creator"
+      RetentionInDays: 1
+
+  # IAM Role for S3 Custom Resource Lambdas
+  S3CustomResourceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3ObjectAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                  - s3:ListBucketVersions
+                  - s3:DeleteObjectVersion
+                Resource: '*'
+
+  # Lambda Function for CodePipeline Artifact Creator
+  CodePipelineArtifactCreatorFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: CodePipelineArtifactCreatorLogGroup
+    Properties:
+      FunctionName: !Sub "${ProjectName}-codepipeline-artifact-creator"
+      Runtime: python3.13
+      Handler: index.lambda_handler
+      Role: !GetAtt S3CustomResourceRole.Arn
+      Timeout: 30
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          import logging
+          import zipfile
+          import io
+          import base64
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          s3_resource = boto3.resource('s3')
+
+          def lambda_handler(event, context):
+              logger.info(f"Received event: {event}")
+
+              response_data = {}
+              physical_resource_id = None
+
+              try:
+                  request_type = event['RequestType']
+                  properties = event['ResourceProperties']
+
+                  artifact_bucket = properties['ArtifactBucket']
+                  artifact_key = properties['ArtifactKey']
+                  files = properties.get('Files', [])
+
+                  # Generate physical resource ID as s3:// URI
+                  physical_resource_id = f"s3://{artifact_bucket}/{artifact_key}"
+
+                  # S3 object using resource
+                  s3_object = s3_resource.Object(artifact_bucket, artifact_key)
+                  if request_type in ['Create', 'Update']:
+                      # Create zip archive in memory
+                      zip_buffer = io.BytesIO()
+
+                      with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                          for file_spec in files:
+                              file_name = file_spec['Name']
+                              file_content = file_spec['Content']
+                              is_base64_encoded = file_spec.get('Base64Encoded', False)
+
+                              # Decode base64 if needed
+                              if is_base64_encoded:
+                                  file_content = base64.b64decode(file_content)
+                              else:
+                                  file_content = file_content.encode('utf-8')
+
+                              # Add file to zip
+                              zip_file.writestr(file_name, file_content)
+
+                      # Get zip data as bytes
+                      zip_data = zip_buffer.getvalue()
+                      zip_buffer.close()
+
+                      # Upload to S3
+                      s3_object.put(Body=zip_data, ContentType='application/zip')
+
+                      logger.info(f"Successfully created/updated CodePipeline artifact: {physical_resource_id}")
+
+                  elif request_type == 'Delete':
+                      # Delete S3 object
+                      try:
+                          s3_object.delete()
+                          logger.info(f"Successfully deleted CodePipeline artifact: {physical_resource_id}")
+
+                      except Exception as e:
+                          logger.warning(f"Error deleting S3 object (ignoring): {str(e)}")
+
+                  response_data['S3Uri'] = physical_resource_id
+                  response_data['BucketName'] = artifact_bucket
+                  response_data['ArtifactKey'] = artifact_key
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data, physical_resource_id)
+
+              except Exception as e:
+                  logger.error(f"Error: {str(e)}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {}, physical_resource_id)
+
+  # CloudWatch Log Group for S3 Bucket Emptier Lambda
+  S3BucketEmptierLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-s3-bucket-emptier"
+      RetentionInDays: 1
+
+  # Lambda Function for S3 Bucket Emptier Custom Resource
+  S3BucketEmptierFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: S3BucketEmptierLogGroup
+    Properties:
+      FunctionName: !Sub "${ProjectName}-s3-bucket-emptier"
+      Runtime: python3.13
+      Handler: index.lambda_handler
+      Role: !GetAtt S3CustomResourceRole.Arn
+      Timeout: 300
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import cfnresponse
+
+          def lambda_handler(event, context):
+              print(json.dumps(event, default=str))
+              try:
+                  bucket_name = event['ResourceProperties']['BucketName']
+                  physical_id = f"EMPTIER_{bucket_name}"
+                  if event['RequestType'] == 'Delete':
+                      print(f'Emptying {bucket_name}...')
+                      bucket = boto3.resource('s3').Bucket(bucket_name)
+                      bucket.object_versions.delete()
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {}, physical_id)
+              except Exception as e:
+                  import traceback
+                  traceback.print_exc()
+                  responseData = {}
+                  responseData['Data'] = str(e)
+                  cfnresponse.send(event, context, cfnresponse.FAILED, responseData, physical_id)
+
+Outputs:
+  VPC:
+    Description: "VPC ID"
+    Value: !Ref VPC
+    Export:
+      Name: !Sub "${ProjectName}-VPC"
+
+  PublicSubnet1:
+    Description: "Public Subnet 1 ID"
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: !Sub "${ProjectName}-PublicSubnet1"
+
+  PublicSubnet2:
+    Description: "Public Subnet 2 ID"
+    Value: !Ref PublicSubnet2
+    Export:
+      Name: !Sub "${ProjectName}-PublicSubnet2"
+
+  ECSCluster:
+    Description: "ECS Cluster Name"
+    Value: !Ref ECSCluster
+    Export:
+      Name: !Sub "${ProjectName}-ECSCluster"
+
+  ECRRepositoryURI:
+    Description: "ECR Repository URI"
+    Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepository}"
+    Export:
+      Name: !Sub "${ProjectName}-ECRRepositoryURI"
+
+  ECRRepositoryName:
+    Description: "ECR Repository Name"
+    Value: !Ref ECRRepository
+    Export:
+      Name: !Sub "${ProjectName}-ECRRepositoryName"
+
+  ECRRepositoryArn:
+    Description: "ECR Repository ARN"
+    Value: !GetAtt ECRRepository.Arn
+    Export:
+      Name: !Sub "${ProjectName}-ECRRepositoryArn"
+
+  CodePipelineArtifactCreatorFunctionArn:
+    Description: "CodePipeline Artifact Creator Lambda Function ARN"
+    Value: !GetAtt CodePipelineArtifactCreatorFunction.Arn
+    Export:
+      Name: !Sub "${ProjectName}-CodePipelineArtifactCreatorFunctionArn"
+
+  S3BucketEmptierFunctionArn:
+    Description: "S3 Bucket Emptier Custom Resource Lambda Function ARN"
+    Value: !GetAtt S3BucketEmptierFunction.Arn
+    Export:
+      Name: !Sub "${ProjectName}-S3BucketEmptierFunctionArn"

@@ -4,16 +4,16 @@ This document explains the integration testing capabilities added to the ECS Cod
 
 ## Overview
 
-The enhanced demo includes automatic integration testing that validates deployments before traffic is switched to the new version. This prevents bad deployments from reaching production and demonstrates real-world deployment safety practices.
+The enhanced demo includes automatic integration testing that validates deployments before traffic is switched to the new version. This prevents bad deployments from reaching production and demonstrates real-world deployment safety practices. The integration testing is triggered automatically through CodePipeline when new images are pushed to ECR.
 
 ## Architecture Components
 
 ### 1. Integration Test Lambda Function
 
 **Function Name**: `{ProjectName}-integration-test`
-**Runtime**: Python 3.9
-**Timeout**: 5 minutes
-**Trigger**: CodeDeploy lifecycle hook (`BeforeAllowTraffic`)
+**Runtime**: Python 3.13
+**Timeout**: 30 seconds
+**Trigger**: CodeDeploy lifecycle hook (`AfterAllowTestTraffic`)
 
 **Key Features**:
 - Tests the new deployment via the ALB test listener (port 8080)
@@ -23,7 +23,7 @@ The enhanced demo includes automatic integration testing that validates deployme
 
 ### 2. CodeDeploy Lifecycle Hooks
 
-The deployment configuration uses the `AfterAllowTestTraffic` hook to run integration tests after test traffic is routed but before switching production traffic to the new version.
+The deployment configuration uses the `AfterAllowTestTraffic` hook to run integration tests after test traffic is routed but before switching production traffic to the new version. This is orchestrated through CodePipeline, which triggers CodeDeploy deployments automatically when new images are pushed to ECR.
 
 **Hook Configuration**:
 ```yaml
@@ -32,12 +32,14 @@ Hooks:
 ```
 
 **Process Flow**:
-1. New tasks start in Green target group
-2. ALB test listener (port 8080) routes to Green targets
-3. CodeDeploy allows test traffic to flow to Green targets
-4. CodeDeploy triggers Lambda function to validate the deployment
-5. Lambda tests the application via port 8080
-6. Based on test results:
+1. EventBridge detects ECR image push and triggers CodePipeline
+2. CodePipeline creates new task definition and starts CodeDeploy deployment
+3. New tasks start in Green target group
+4. ALB test listener (port 8080) routes to Green targets
+5. CodeDeploy allows test traffic to flow to Green targets
+6. CodeDeploy triggers Lambda function to validate the deployment
+7. Lambda tests the application via port 8080
+8. Based on test results:
    - **Success**: Production traffic switches to Green (deployment completes)
    - **Failure**: Deployment rolls back to Blue (previous version)
 
@@ -94,13 +96,13 @@ The Lambda function performs three categories of tests:
 ```bash
 ./scripts/build-and-deploy.sh v2.0
 ```
-**Expected Result**: Tests pass, deployment succeeds
+**Expected Result**: ECR push → EventBridge → CodePipeline → CodeDeploy → Tests pass → Deployment succeeds
 
 ### Deploy Failure Version
 ```bash
 ./scripts/build-and-deploy.sh v4.0
 ```
-**Expected Result**: Tests fail, automatic rollback occurs
+**Expected Result**: ECR push → EventBridge → CodePipeline → CodeDeploy → Tests fail → Automatic rollback occurs
 
 ## Monitoring and Debugging
 
@@ -109,10 +111,12 @@ The Lambda function performs three categories of tests:
 - CodeDeploy deployment logs: Available in CodeDeploy console
 
 ### Useful AWS Console Views
-1. **CodeDeploy Application**: Monitor deployment status and history
-2. **Lambda Function**: View test execution logs and metrics
-3. **ECS Service**: Monitor task health and deployment progress
-4. **ALB Target Groups**: Check Blue/Green target health
+1. **CodePipeline**: Monitor overall deployment pipeline progress
+2. **CodeDeploy Application**: Monitor deployment status and history
+3. **Lambda Function**: View test execution logs and metrics
+4. **ECS Service**: Monitor task health and deployment progress
+5. **ALB Target Groups**: Check Blue/Green target health
+6. **EventBridge Rules**: Monitor ECR push event triggers
 
 ### Common Debug Commands
 ```bash
@@ -135,7 +139,7 @@ aws logs tail /aws/lambda/{project-name}-integration-test --follow
 ### CodeDeploy Configuration
 - **Deployment Config**: `CodeDeployDefault.ECSCanary10Percent5Minutes`
 - **Auto Rollback**: Enabled for deployment failures
-- **Termination Wait**: 5 minutes after successful deployment
+- **Termination Wait**: 1 minute after successful deployment
 
 ## Best Practices
 
@@ -194,9 +198,11 @@ aws logs tail /aws/lambda/{project-name}-integration-test --follow
 ### Common Issues
 
 **Integration tests not triggered**
-- Check CodeDeploy deployment group configuration
+- Check CodePipeline execution status
+- Verify CodeDeploy deployment group configuration
 - Verify Lambda function exists and has correct permissions
 - Ensure appspec.yml includes correct hook configuration
+- Check EventBridge rule is triggering CodePipeline
 
 **Tests fail unexpectedly**
 - Check ALB test listener is correctly configured
@@ -208,12 +214,15 @@ aws logs tail /aws/lambda/{project-name}-integration-test --follow
 - Verify auto-rollback configuration in deployment group
 - Check Lambda function properly reports failure status
 - Ensure CodeDeploy has necessary permissions
+- Review CodePipeline execution for errors
 
 ### Debug Steps
 1. Run `./scripts/validate-setup.sh` for overall health
-2. Check CloudWatch logs for detailed execution information
-3. Verify ALB and target group configurations
-4. Review CodeDeploy deployment events and logs
+2. Check CodePipeline execution history and logs
+3. Check CloudWatch logs for detailed execution information
+4. Verify ALB and target group configurations
+5. Review CodeDeploy deployment events and logs
+6. Check EventBridge rule metrics and invocations
 
 ## Real-World Applications
 
