@@ -69,7 +69,6 @@ One of the major benefits of using CodePipeline (instead of Lambda triggers) is 
 # These rapid deployments are now safe:
 ./scripts/build-and-deploy.sh v2.0
 ./scripts/build-and-deploy.sh v3.0  # Waits for v2.0 to complete
-./scripts/build-and-deploy.sh v2.0  # Waits for v3.0 to complete
 ```
 
 Previously with Lambda triggers, rapid deployments would cause failures. Now CodePipeline gracefully handles the queue.
