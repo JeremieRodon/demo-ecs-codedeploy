@@ -754,7 +754,6 @@ Resources:
   # CodePipeline ensures strict deployment ordering - a major improvement over Lambda triggers:
   # - Rapid successive ECR pushes are safely queued (no race conditions)
   # - Each deployment waits for the previous one to complete before starting
-  # - Eliminates Lambda crashes from concurrent CodeDeploy attempts
   # - Provides reliable deployment history and rollback capabilities
   CodePipeline:
     Type: AWS::CodePipeline::Pipeline
